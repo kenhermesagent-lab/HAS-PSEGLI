@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PSEG Long Island",
+        "description": "Paste the **Cookie** request header from a logged-in session at mysmartenergy.psegliny.com.\n\nIn Chrome: open the portal, press F12, go to Network, reload, click the `Dashboard` request, and copy the whole value of the `Cookie` request header. Firefox: same idea under Network > Headers.",
+        "data": {
+          "cookie": "Session cookie",
+          "name": "Name"
+        },
+        "data_description": {
+          "cookie": "The Cookie header from a logged-in MySmartEnergy session.",
+          "name": "Friendly name for this PSEG account."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Refresh the PSEG session",
+        "description": "The session cookie for PSEG Long Island has expired. Log in at mysmartenergy.psegliny.com again and paste a fresh Cookie header.",
+        "data": {
+          "cookie": "Session cookie"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "PSEG rejected that cookie. Copy the Cookie header from a page that is actually logged in.",
+      "cannot_connect": "Could not reach the PSEG portal. Try again in a few minutes.",
+      "unknown": "Unexpected error. Check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "PSEG Long Island is already configured.",
+      "reauth_successful": "The PSEG session was refreshed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PSEG tariff and history",
+        "description": "Costs are estimated from these values. PSEG publishes a new power supply charge every month, so update the supply rate when your bill changes. The daily service charge is added once per day in the period totals and is not included in the hourly cost statistic.",
+        "data": {
+          "rate_mode": "Rate mode",
+          "delivery_rate": "Delivery charge (off-peak)",
+          "supply_rate": "Power supply charge",
+          "peak_delivery_rate": "Peak delivery charge",
+          "peak_supply_multiplier": "Peak supply multiplier",
+          "daily_service_charge": "Daily service charge",
+          "peak_start_hour": "Peak starts (hour)",
+          "peak_end_hour": "Peak ends (hour)",
+          "peak_weekdays_only": "Peak applies on weekdays only",
+          "week_start": "First day of the week",
+          "billing_day": "Billing cycle start day",
+          "backfill_days": "Days of history to import",
+          "timestamp_offset_minutes": "Timestamp correction"
+        },
+        "data_description": {
+          "rate_mode": "Use 'flat' if your bill has one delivery rate all day, or 'tou' for a time-of-day rate.",
+          "delivery_rate": "Delivery portion in USD per kWh. For a TOU rate this is the off-peak value.",
+          "supply_rate": "Power supply charge in USD per kWh for the current month.",
+          "peak_delivery_rate": "Delivery portion during peak hours, USD per kWh.",
+          "peak_supply_multiplier": "Multiplier applied to the supply charge during peak hours (PSEG TOU rates use a value above 1).",
+          "daily_service_charge": "Fixed charge in USD per day.",
+          "peak_start_hour": "Local hour when peak pricing begins (24h clock).",
+          "peak_end_hour": "Local hour when peak pricing ends (24h clock).",
+          "week_start": "Which day the 'this week' sensor starts on.",
+          "billing_day": "Day of the month your billing cycle starts, used by the cycle sensors.",
+          "backfill_days": "How much history to download on first setup. 0 disables the automatic backfill.",
+          "timestamp_offset_minutes": "Only change this if PSEG timestamps look shifted in your timezone. Positive values move readings later."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "latest_interval_usage": { "name": "Latest interval usage" },
+      "today_usage": { "name": "Today usage" },
+      "today_cost": { "name": "Today cost" },
+      "yesterday_usage": { "name": "Yesterday usage" },
+      "yesterday_cost": { "name": "Yesterday cost" },
+      "week_usage": { "name": "This week usage" },
+      "week_cost": { "name": "This week cost" },
+      "month_usage": { "name": "This month usage" },
+      "month_cost": { "name": "This month cost" },
+      "last_month_usage": { "name": "Last month usage" },
+      "last_month_cost": { "name": "Last month cost" },
+      "cycle_usage": { "name": "Billing cycle usage" },
+      "cycle_cost": { "name": "Billing cycle cost" },
+      "last_reading": { "name": "Last reading" }
+    }
+  },
+  "services": {
+    "backfill": {
+      "name": "Backfill usage",
+      "description": "Download historical hourly usage from PSEG and import it into long-term statistics."
+    }
+  }
+}
