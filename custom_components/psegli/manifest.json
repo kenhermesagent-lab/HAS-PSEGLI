@@ -1,0 +1,13 @@
+{
+  "domain": "psegli",
+  "name": "PSEG Long Island (MySmartEnergy)",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/kenhermesagent-lab/HAS-PSEGLI",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/kenhermesagent-lab/HAS-PSEGLI/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

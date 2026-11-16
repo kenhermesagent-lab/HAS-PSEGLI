@@ -1,0 +1,17 @@
+backfill:
+  name: Backfill usage
+  description: >-
+    Download historical hourly usage from PSEG Long Island and import it into
+    Home Assistant long-term statistics. Existing intervals are skipped.
+  fields:
+    days:
+      name: Days
+      description: How many days of history to request (1-400).
+      required: false
+      example: 30
+      selector:
+        number:
+          min: 1
+          max: 400
+          step: 1
+          unit_of_measurement: days
