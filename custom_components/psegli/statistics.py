@@ -13,18 +13,32 @@ from homeassistant.components.recorder.statistics import (
 )
 from homeassistant.core import HomeAssistant
 
-from .const import COST_STATISTIC_ID, DOMAIN, NAME, USAGE_STATISTIC_ID
-from .parser import Tariff, UsagePoint
+from .const import (
+    COST_STATISTIC_ID,
+    DOMAIN,
+    MAX_BACKFILL_DAYS,
+    NAME,
+    USAGE_STATISTIC_ID,
+)
+from .parser import Tariff, UsagePoint, cumulative_hourly
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Cheap window that covers the normal polling overlap.
 _LOOKBACK = timedelta(days=45)
+#: Used when the narrow window finds nothing, so a long gap (integration
+#: disabled for months, Home Assistant offline) continues the stored sum
+#: instead of restarting it at zero and making the sensor look reset.
+_WIDE_LOOKBACK = timedelta(days=MAX_BACKFILL_DAYS + 60)
 
 
-async def _async_last_state(
-    hass: HomeAssistant, statistic_id: str, before: datetime
+async def _async_last_state_within(
+    hass: HomeAssistant,
+    statistic_id: str,
+    before: datetime,
+    lookback: timedelta,
 ) -> tuple[datetime | None, float]:
-    """Return the last recorded (start, cumulative sum) before a timestamp."""
+    """Return the newest stored (start, cumulative sum) in a window."""
     try:
         instance = get_instance(hass)
     except KeyError:
@@ -35,7 +49,7 @@ async def _async_last_state(
         rows = await instance.async_add_executor_job(
             statistics_during_period,
             hass,
-            before - _LOOKBACK,
+            before - lookback,
             before,
             [statistic_id],
             "hour",
@@ -46,13 +60,25 @@ async def _async_last_state(
         _LOGGER.debug("Could not read statistics for %s", statistic_id, exc_info=True)
         return None, 0.0
 
-    entries = rows.get(statistic_id) or []
-    for entry in reversed(entries):
+    for entry in reversed(rows.get(statistic_id) or []):
         if entry.get("sum") is not None:
             start = entry["start"]
             if isinstance(start, datetime) and start.tzinfo is None:
                 start = start.replace(tzinfo=timezone.utc)
             return start, float(entry["sum"])
+    return None, 0.0
+
+
+async def _async_last_state(
+    hass: HomeAssistant, statistic_id: str, before: datetime
+) -> tuple[datetime | None, float]:
+    """Return the newest stored (start, cumulative sum) at or before a time."""
+    for lookback in (_LOOKBACK, _WIDE_LOOKBACK):
+        start, total = await _async_last_state_within(
+            hass, statistic_id, before, lookback
+        )
+        if start is not None:
+            return start, total
     return None, 0.0
 
 
@@ -81,43 +107,54 @@ async def async_import_usage(
     tariff: Tariff,
     tz: tzinfo,
 ) -> None:
-    """Store new hourly points as cumulative usage and cost statistics.
+    """Write hourly points as cumulative usage and cost statistics.
 
-    Only points newer than the last stored statistic are written, so repeated
-    polls and backfills never double count.
+    Rows are recomputed from the last stored sum *before* the imported range,
+    which is what makes a backfill safe to repeat: hours already in the
+    database are replaced by the recorder (upsert on the start timestamp)
+    rather than counted twice, and hours the portal no longer reports as used
+    are rewritten to a zero contribution.
     """
-    ordered = sorted((point for point in points if point.kwh > 0), key=lambda p: p.start)
-    if not ordered:
+    if not points:
         return
 
-    first_start = ordered[0].start
-    last_start, usage_sum = await _async_last_state(hass, USAGE_STATISTIC_ID, first_start)
-    _, cost_sum = await _async_last_state(hass, COST_STATISTIC_ID, first_start)
+    # Compare on the hour boundary: rows are stored per hour, and using a
+    # point's exact timestamp could pick up the row of the hour we are about
+    # to rewrite.
+    first_start = (
+        min(point.start for point in points)
+        .astimezone(timezone.utc)
+        .replace(minute=0, second=0, microsecond=0)
+    )
+    last_start, usage_base = await _async_last_state(
+        hass, USAGE_STATISTIC_ID, first_start
+    )
+    _, cost_base = await _async_last_state(hass, COST_STATISTIC_ID, first_start)
 
-    usage_rows: list[dict[str, Any]] = []
-    cost_rows: list[dict[str, Any]] = []
+    rows = cumulative_hourly(
+        points,
+        tariff,
+        tz,
+        usage_base=usage_base,
+        cost_base=cost_base,
+        after=last_start,
+    )
+    if not rows:
+        return
 
-    for point in ordered:
-        if last_start is not None and point.start <= last_start:
-            continue
-        rate = tariff.rate_at(point.start.astimezone(tz))
-        usage_sum += point.kwh
-        cost_sum += point.kwh * rate
-        start = point.start.astimezone(timezone.utc).replace(
-            minute=0, second=0, microsecond=0
-        )
-        usage_rows.append({"start": start, "sum": round(usage_sum, 6)})
-        cost_rows.append({"start": start, "sum": round(cost_sum, 6)})
-
-    if usage_rows:
-        async_add_external_statistics(
-            hass,
-            _metadata(USAGE_STATISTIC_ID, f"{NAME} usage", "kWh"),
-            usage_rows,
-        )
-    if cost_rows:
-        async_add_external_statistics(
-            hass,
-            _metadata(COST_STATISTIC_ID, f"{NAME} cost", "USD"),
-            cost_rows,
-        )
+    async_add_external_statistics(
+        hass,
+        _metadata(USAGE_STATISTIC_ID, f"{NAME} usage", "kWh"),
+        [{"start": start, "sum": usage} for start, usage, _cost in rows],
+    )
+    async_add_external_statistics(
+        hass,
+        _metadata(COST_STATISTIC_ID, f"{NAME} cost", "USD"),
+        [{"start": start, "sum": cost} for start, _usage, cost in rows],
+    )
+    _LOGGER.debug(
+        "Wrote %s PSEG statistics rows from %s to %s",
+        len(rows),
+        rows[0][0].isoformat(),
+        rows[-1][0].isoformat(),
+    )

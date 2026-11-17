@@ -157,6 +157,95 @@ class TariffTests(unittest.TestCase):
         self.assertAlmostEqual(tariff.rate_at(saturday_peak), 0.21)
 
 
+class CumulativeHourlyTests(unittest.TestCase):
+    """The rows the recorder stores for usage and cost."""
+
+    def setUp(self) -> None:
+        self.tariff = parser.Tariff(
+            mode=parser.RATE_MODE_FLAT,
+            delivery_rate=0.10,
+            supply_rate=0.05,
+        )
+
+    def _point(self, hour: int, minute: int, kwh: float) -> parser.UsagePoint:
+        return parser.UsagePoint(
+            start=datetime(2026, 1, 15, hour, minute, tzinfo=timezone.utc), kwh=kwh
+        )
+
+    def test_values_aggregate_into_utc_hours(self) -> None:
+        rows = parser.cumulative_hourly(
+            [
+                self._point(10, 5, 1.0),
+                self._point(11, 0, 2.0),
+                self._point(10, 40, 0.5),
+            ],
+            self.tariff,
+            NY,
+            usage_base=10.0,
+            cost_base=2.0,
+        )
+
+        self.assertEqual(
+            [row[0] for row in rows],
+            [
+                datetime(2026, 1, 15, 10, tzinfo=timezone.utc),
+                datetime(2026, 1, 15, 11, tzinfo=timezone.utc),
+            ],
+        )
+        self.assertAlmostEqual(rows[0][1], 11.5)
+        self.assertAlmostEqual(rows[1][1], 13.5)
+        self.assertAlmostEqual(rows[0][2], 2.0 + 1.5 * 0.15)
+        self.assertAlmostEqual(rows[1][2], 2.0 + 3.5 * 0.15)
+
+    def test_after_skips_the_already_stored_hour(self) -> None:
+        rows = parser.cumulative_hourly(
+            [self._point(10, 0, 1.0), self._point(11, 0, 2.0)],
+            self.tariff,
+            NY,
+            usage_base=5.0,
+            after=datetime(2026, 1, 15, 10, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0].hour, 11)
+        self.assertAlmostEqual(rows[0][1], 7.0)
+
+    def test_revised_hour_is_rewritten_without_its_old_value(self) -> None:
+        rows = parser.cumulative_hourly(
+            [self._point(10, 0, 0.0)],
+            self.tariff,
+            NY,
+            usage_base=7.0,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0][1], 7.0)
+        self.assertAlmostEqual(rows[0][2], 0.0)
+
+    def test_sums_stay_monotonic_across_a_second_backfill(self) -> None:
+        first = parser.cumulative_hourly(
+            [self._point(10, 0, 1.0), self._point(11, 0, 1.0)], self.tariff, NY
+        )
+        # A later run reaches further back, so the stored sums are recomputed
+        # from the older base instead of being appended to.
+        second = parser.cumulative_hourly(
+            [
+                self._point(8, 0, 2.0),
+                self._point(9, 0, 2.0),
+                self._point(10, 0, 1.0),
+                self._point(11, 0, 1.0),
+            ],
+            self.tariff,
+            NY,
+        )
+
+        self.assertAlmostEqual(first[-1][1], 2.0)
+        self.assertAlmostEqual(second[-1][1], 6.0)
+        self.assertEqual(
+            [row[1] for row in second], sorted(row[1] for row in second)
+        )
+
+
 class AggregateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tariff = parser.Tariff(

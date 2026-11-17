@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import timedelta, timezone, tzinfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -15,13 +15,10 @@ from homeassistant.util import dt as dt_util
 from .api import PsegliClient
 from .const import (
     CONF_BACKFILL_DAYS,
-    CONF_BILLING_DAY,
     CONF_TIMESTAMP_OFFSET,
-    CONF_WEEK_START,
     DEFAULT_BACKFILL_DAYS,
     DEFAULT_LOOKBACK_DAYS,
     DEFAULT_TARIFF,
-    DOMAIN,
     MAX_BACKFILL_DAYS,
     NAME,
     UPDATE_INTERVAL_MINUTES,
@@ -130,7 +127,12 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
         try:
             points = await self.client.async_fetch_points(start, now_local.date())
         except PsegliAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
+            # A service call cannot start a re-authentication flow, so this has
+            # to be a plain error the user can act on.
+            raise HomeAssistantError(
+                "PSEG rejected the session. Re-authenticate the integration and "
+                "run the backfill again."
+            ) from err
         except PsegliError as err:
             raise HomeAssistantError(f"PSEG backfill failed: {err}") from err
 
@@ -139,5 +141,7 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
             return
 
         await async_import_usage(self.hass, points, self.tariff, self.time_zone)
-        _LOGGER.info("Imported %s PSEG intervals from the last %s days", len(points), days)
+        _LOGGER.info(
+            "Imported %s PSEG intervals covering the last %s days", len(points), days
+        )
         await self.async_request_refresh()

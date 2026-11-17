@@ -6,6 +6,7 @@ unit tested without a Home Assistant installation.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -339,3 +340,43 @@ def aggregate(
 def latest_point(points: Sequence[UsagePoint]) -> UsagePoint | None:
     """Return the most recent interval, if any."""
     return max(points, key=lambda point: point.start) if points else None
+
+
+def cumulative_hourly(
+    points: Sequence[UsagePoint],
+    tariff: Tariff,
+    tz: tzinfo,
+    *,
+    usage_base: float = 0.0,
+    cost_base: float = 0.0,
+    after: datetime | None = None,
+) -> list[tuple[datetime, float, float]]:
+    """Fold intervals into hourly cumulative (start, usage sum, cost sum) rows.
+
+    The portal returns hourly intervals, but nothing guarantees they land on
+    the hour and the same hour can appear twice, so values are aggregated per
+    UTC hour first.  ``usage_base`` and ``cost_base`` are the stored sums just
+    before this range; each returned sum is that base plus the running total.
+    Rows at or before ``after`` are skipped because their sum already includes
+    them.
+    """
+    hourly: dict[datetime, float] = {}
+    for point in points:
+        if point.kwh < 0 or not math.isfinite(point.kwh):
+            continue
+        start = point.start.astimezone(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
+        hourly[start] = hourly.get(start, 0.0) + point.kwh
+
+    usage_sum = float(usage_base)
+    cost_sum = float(cost_base)
+    rows: list[tuple[datetime, float, float]] = []
+    for start in sorted(hourly):
+        if after is not None and start <= after:
+            continue
+        kwh = hourly[start]
+        usage_sum += kwh
+        cost_sum += kwh * tariff.rate_at(start.astimezone(tz))
+        rows.append((start, round(usage_sum, 6), round(cost_sum, 6)))
+    return rows

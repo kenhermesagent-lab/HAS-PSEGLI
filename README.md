@@ -8,16 +8,31 @@ It exists because the official Opower integration does not cover PSEG Long Islan
 
 ## What it does
 
-- Logs into `mysmartenergy.psegliny.com` with a browser session cookie you paste in once.
+- Signs in to `mysmartenergy.psegliny.com` with your PSEG email and password, and signs in again on its own when PSEG expires the session.
+- Keeps the session cookies PSEG rotates on every response, so a Home Assistant restart does not log you out.
+- Falls back to a pasted browser session cookie for accounts that PSEG makes interactive (security question, verification code, reCAPTCHA).
 - Downloads the hourly usage series (the same data the portal charts) and aggregates it locally.
 - Creates real sensor entities for usage and cost: today, yesterday, this week, this month, last month and the current billing cycle.
 - Writes both kWh and USD into Home Assistant long-term statistics, so the built-in Energy Dashboard can use them.
 - Adds a `psegli.backfill` service to pull up to 400 days of history.
-- Asks you for a fresh cookie through Home Assistant's normal "Re-authenticate" flow when the session expires.
+- Only asks you for anything through Home Assistant's normal "Re-authenticate" flow when PSEG blocks an automatic sign-in.
 
-## Why a cookie instead of username and password?
+## How sign-in works
 
-The PSEG portal sits behind reCAPTCHA and email/SMS verification codes, and there is no OAuth or public API. Automating the login reliably is not possible from a Home Assistant integration, so this integration uses the session cookie your browser already has. That is also why it does not lock your account by retrying bad passwords.
+There is no OAuth or public API, so the integration talks to the same ASP.NET endpoints the portal's own login form uses.
+
+| Method | What happens |
+| --- | --- |
+| **Email and password** (recommended) | The integration posts your credentials to `/Home/Login`, keeps the resulting session cookies, and signs in again automatically whenever the portal expires them. |
+| **Browser session cookie** | You paste a `Cookie` header from a browser that is already logged in. Nothing is signed in automatically. |
+
+Three things keep the automatic mode out of your way:
+
+- **Rotated cookies are saved.** PSEG hands back fresh session cookies as you browse; the integration stores them in the config entry, so a restart or a cookie rotation does not force a new login.
+- **Sign-ins are rate limited.** After a failed sign-in it waits 15 minutes before trying again, so a wrong password can never lock your account.
+- **PSEG's challenges are detected.** If the account is asked for a security question, an email/SMS code, a reCAPTCHA or a password change, the integration says so instead of guessing, and you finish with the cookie method.
+
+Credentials live in Home Assistant's `.storage` and are only sent to `mysmartenergy.psegliny.com`.
 
 ## Installation
 
@@ -34,7 +49,9 @@ Copy `custom_components/psegli` into your Home Assistant `config/custom_componen
 
 > If you previously installed another `psegli` custom component, remove it first — two integrations cannot share the same domain.
 
-## Getting your session cookie
+## Getting your session cookie (cookie mode only)
+
+Use this when your account asks for a verification code, or when you prefer not to store a password.
 
 1. Log in at <https://mysmartenergy.psegliny.com/Dashboard>.
 2. Open your browser developer tools (F12) → **Network** tab.
@@ -43,7 +60,7 @@ Copy `custom_components/psegli` into your Home Assistant `config/custom_componen
 5. In **Request Headers**, copy the entire value of the `Cookie` header.
 6. Paste it into the integration setup form.
 
-The cookie is stored in Home Assistant's `.storage` and is only sent to `mysmartenergy.psegliny.com`. When it expires, Home Assistant will show a **Re-authenticate** button; paste a fresh cookie there.
+The cookie is stored in Home Assistant's `.storage` and is only sent to `mysmartenergy.psegliny.com`. When it expires, Home Assistant shows a **Re-authenticate** button; paste a fresh cookie there. If the entry has a stored password, pressing **Re-authenticate** is usually enough on its own, because the integration signs in again first.
 
 ## Tariff configuration
 
@@ -79,7 +96,7 @@ Each period has a usage sensor (kWh) and a cost sensor (USD):
 - `sensor.pseg_long_island_latest_interval_usage` — newest hourly reading, with rate and peak attributes
 - `sensor.pseg_long_island_last_reading` — timestamp of the newest reading (disabled by default)
 
-The period sensors use `state_class: total` with a `last_reset` at the start of each period, so they behave correctly on the Energy Dashboard and in statistics graphs.
+The accumulating period sensors (today, this week, this month, billing cycle) use `state_class: total_increasing`, which is what Home Assistant defines for a total that restarts at a period boundary. Yesterday and last month are snapshots of a finished period and can move either way, so they use `total` with a `last_reset` at the start of the period. The cost sensors are `total` with `last_reset` as well, because the monetary device class does not accept `total_increasing`.
 
 ### Energy Dashboard
 
@@ -93,18 +110,22 @@ data:
   days: 365
 ```
 
-PSEG keeps sub-daily interval data for about 13 months. Existing intervals are skipped, so running it twice does not double count.
+PSEG keeps sub-daily interval data for about 13 months. The import rewrites the hours it covers instead of appending blindly, so running it twice does not double count, an hour PSEG later revises to zero loses its old value, and running it again with a larger range adds the older months and recalculates the cumulative sums from them.
 
 ## What to expect
 
 - **Data is not real-time.** PSEG states the smart meter transmits about three times a day, so hourly readings typically appear in batches, hours after the fact. This is a billing and cost view, not a live power monitor.
-- **The cookie will expire eventually.** Re-authenticate when Home Assistant asks.
+- **The session will expire eventually.** With a stored password this is invisible; without one, re-authenticate when Home Assistant asks. PSEG can also invalidate sessions after a password change.
 - **PSEG can change the portal.** The endpoints used here are the same ones the dashboard calls; if PSEG redesigns MySmartEnergy, the integration will need an update.
 - **Cost is estimated from your inputs**, not read from your bill. It will drift from the real bill if the supply rate changes or your usage falls under a tiered block.
 
 ## Troubleshooting
 
 **"PSEG rejected that cookie"** — the cookie is expired or was copied from a page that is not logged in. Repeat the cookie steps and paste the whole header.
+
+**Automatic sign-in stopped working** — check the log for the PSEG message. *Invalid email address or password* means the stored password changed: remove and re-add the integration, or re-authenticate. A message about a security question, verification code or reCAPTCHA means the account needs a human; switch the entry to the session cookie method. PSEG may also lock the account the same way a browser would, so keep the sign-in method honest rather than retrying a bad password.
+
+**Sign-in succeeded but no data** — the login worked and the account simply has no usage for that range; check the portal itself.
 
 **No data, no errors** — confirm MySmartEnergy shows usage for the account. Brand-new accounts and meters without Smart Energy enabled will return an empty series.
 
@@ -120,7 +141,7 @@ logger:
 
 ## Development
 
-The parsing, aggregation and tariff code has no Home Assistant imports and is covered by offline tests:
+The parsing, aggregation, tariff and sign-in code has no Home Assistant imports and is covered by offline tests. The client tests run against a small fake portal that speaks the same login/JSON/cookie protocol:
 
 ```bash
 python -m unittest discover -s tests -t . -v

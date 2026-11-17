@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import logging
 
+import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import PsegliClient
 from .const import (
     ATTR_DAYS,
     CONF_BACKFILL_DAYS,
     CONF_COOKIE,
+    CONF_EMAIL,
+    CONF_PASSWORD,
     CONF_TIMESTAMP_OFFSET,
     DEFAULT_BACKFILL_DAYS,
     DOMAIN,
@@ -60,10 +63,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (TypeError, ValueError):
         offset = 0
 
+    # A private session with its own cookie jar: the portal rotates its session
+    # cookie, and those rotated values must not leak into other integrations
+    # (nor be overwritten by them).
+    # auto_cleanup closes this session when the config entry unloads.
+    session = async_create_clientsession(
+        hass, cookie_jar=aiohttp.CookieJar(unsafe=False)
+    )
+
+    def _async_store_cookie(cookie: str) -> None:
+        """Persist cookies PSEG handed back during a request."""
+        if not cookie or entry.data.get(CONF_COOKIE) == cookie:
+            return
+        _LOGGER.debug("Storing refreshed PSEG session cookies")
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_COOKIE: cookie}
+        )
+
     client = PsegliClient(
-        async_get_clientsession(hass), entry.data[CONF_COOKIE], offset
+        session,
+        entry.data.get(CONF_COOKIE, ""),
+        email=entry.data.get(CONF_EMAIL),
+        password=entry.data.get(CONF_PASSWORD),
+        timestamp_offset_minutes=offset,
+        on_cookie_refresh=_async_store_cookie,
     )
     coordinator = PsegliCoordinator(hass, entry, client)
+    # Cookie refreshes update the entry's data, which also notifies update
+    # listeners; remember the options so those notifications do not turn into
+    # an endless refresh loop.
+    options_snapshot = dict(entry.options)
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -72,7 +101,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+    async def _async_entry_updated(
+        hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        if dict(entry.options) == options_snapshot:
+            return
+        options_snapshot.clear()
+        options_snapshot.update(entry.options)
+        await coordinator.async_request_refresh()
+
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     backfill_days = int(
         entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS)
@@ -95,16 +133,7 @@ async def _async_initial_backfill(
     try:
         await coordinator.async_backfill(days)
     except Exception:  # noqa: BLE001 - a failed backfill must not break setup
-        _LOGGER.warning("Initial PSEG backfill failed", exc_info=True)
-
-
-async def _async_options_updated(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> None:
-    """Apply tariff changes without reloading the integration."""
-    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if coordinator is not None:
-        await coordinator.async_request_refresh()
+                _LOGGER.warning("Initial PSEG backfill failed", exc_info=True)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

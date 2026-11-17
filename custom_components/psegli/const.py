@@ -32,9 +32,16 @@ BASE_URL: Final = "https://mysmartenergy.psegliny.com"
 DASHBOARD_PATH: Final = "/Dashboard"
 CHART_PATH: Final = "/Dashboard/Chart"
 CHART_DATA_PATH: Final = "/Dashboard/ChartData"
+LOGIN_PATH: Final = "/Home/Login"
 
 CONF_COOKIE: Final = "cookie"
 CONF_NAME: Final = "name"
+CONF_AUTH_MODE: Final = "auth_mode"
+CONF_EMAIL: Final = "email"
+CONF_PASSWORD: Final = "password"
+
+AUTH_MODE_PASSWORD: Final = "password"
+AUTH_MODE_COOKIE: Final = "cookie"
 
 CONF_RATE_MODE = OPT_RATE_MODE
 CONF_DELIVERY_RATE = OPT_DELIVERY_RATE
@@ -64,15 +71,20 @@ COST_STATISTIC_ID: Final = f"{DOMAIN}:cost"
 PLATFORMS: Final = ["sensor"]
 
 __all__ = [
+    "AUTH_MODE_COOKIE",
+    "AUTH_MODE_PASSWORD",
     "BASE_URL",
     "CHART_DATA_PATH",
     "CHART_PATH",
+    "CONF_AUTH_MODE",
     "CONF_BACKFILL_DAYS",
     "CONF_BILLING_DAY",
     "CONF_COOKIE",
     "CONF_DAILY_SERVICE_CHARGE",
     "CONF_DELIVERY_RATE",
+    "CONF_EMAIL",
     "CONF_NAME",
+    "CONF_PASSWORD",
     "CONF_PEAK_DELIVERY_RATE",
     "CONF_PEAK_END_HOUR",
     "CONF_PEAK_START_HOUR",
@@ -88,6 +100,7 @@ __all__ = [
     "DEFAULT_LOOKBACK_DAYS",
     "DEFAULT_TARIFF",
     "DOMAIN",
+    "LOGIN_PATH",
     "MAX_BACKFILL_DAYS",
     "NAME",
     "PLATFORMS",

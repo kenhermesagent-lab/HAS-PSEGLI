@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -19,6 +20,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import BASE_URL, DOMAIN, NAME
 from .coordinator import PsegliCoordinator
 
+#: All state comes from the coordinator, so there is nothing to throttle per
+#: entity and no benefit in serialising the updates.
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True)
 class PeriodDescription:
@@ -26,15 +31,20 @@ class PeriodDescription:
 
     key: str
     translation_key: str
+    state_class: SensorStateClass
 
 
 PERIODS: tuple[PeriodDescription, ...] = (
-    PeriodDescription("today", "today"),
-    PeriodDescription("yesterday", "yesterday"),
-    PeriodDescription("week", "week"),
-    PeriodDescription("month", "month"),
-    PeriodDescription("last_month", "last_month"),
-    PeriodDescription("cycle", "cycle"),
+    # Today, this week, this month and the billing cycle only grow inside their
+    # period and restart at the period boundary: that is TOTAL_INCREASING.
+    PeriodDescription("today", "today", SensorStateClass.TOTAL_INCREASING),
+    # Yesterday and last month are snapshots of a finished period. Their value
+    # can move either way, so they stay TOTAL with an explicit reset point.
+    PeriodDescription("yesterday", "yesterday", SensorStateClass.TOTAL),
+    PeriodDescription("week", "week", SensorStateClass.TOTAL_INCREASING),
+    PeriodDescription("month", "month", SensorStateClass.TOTAL_INCREASING),
+    PeriodDescription("last_month", "last_month", SensorStateClass.TOTAL),
+    PeriodDescription("cycle", "cycle", SensorStateClass.TOTAL_INCREASING),
 )
 
 
@@ -79,7 +89,6 @@ class PsegliUsageSensor(PsegliBaseSensor):
 
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 3
 
     def __init__(
@@ -88,6 +97,7 @@ class PsegliUsageSensor(PsegliBaseSensor):
         super().__init__(coordinator, f"{period.key}_usage")
         self._period = period.key
         self._attr_translation_key = f"{period.translation_key}_usage"
+        self._attr_state_class = period.state_class
 
     @property
     def native_value(self) -> float | None:
@@ -95,7 +105,10 @@ class PsegliUsageSensor(PsegliBaseSensor):
         return None if totals is None else totals.kwh
 
     @property
-    def last_reset(self):
+    def last_reset(self) -> datetime | None:
+        """Start of the period for TOTAL sensors; TOTAL_INCREASING resets itself."""
+        if self._attr_state_class != SensorStateClass.TOTAL:
+            return None
         totals = self.coordinator.data.aggregates.get(self._period)
         return None if totals is None else totals.start
 
@@ -110,6 +123,8 @@ class PsegliCostSensor(PsegliBaseSensor):
 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = "USD"
+    # The monetary device class only accepts TOTAL, so the period reset is
+    # expressed with last_reset instead of TOTAL_INCREASING.
     _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 2
 
@@ -126,7 +141,7 @@ class PsegliCostSensor(PsegliBaseSensor):
         return None if totals is None else totals.cost
 
     @property
-    def last_reset(self):
+    def last_reset(self) -> datetime | None:
         totals = self.coordinator.data.aggregates.get(self._period)
         return None if totals is None else totals.start
 
@@ -179,6 +194,6 @@ class PsegliLastReadingSensor(PsegliBaseSensor):
         super().__init__(coordinator, "last_reading")
 
     @property
-    def native_value(self):
+    def native_value(self) -> datetime | None:
         latest = self.coordinator.data.latest
         return None if latest is None else latest.start

@@ -3,28 +3,46 @@
     "step": {
       "user": {
         "title": "PSEG Long Island",
-        "description": "Paste the **Cookie** request header from a logged-in session at mysmartenergy.psegliny.com.\n\nIn Chrome: open the portal, press F12, go to Network, reload, click the `Dashboard` request, and copy the whole value of the `Cookie` request header. Firefox: same idea under Network > Headers.",
+        "description": "Choose how Home Assistant should sign in to mysmartenergy.psegliny.com.\n\n**Email and password** signs in automatically and renews the session whenever PSEG expires it, so you never paste a cookie again. **Browser session cookie** is the fallback for accounts with a security question, an SMS/email verification code or a reCAPTCHA prompt.\n\nFor cookie mode: open the portal, press F12, go to Network, reload, click the `Dashboard` request and copy the whole value of the `Cookie` request header.",
         "data": {
+          "auth_mode": "Sign-in method",
+          "email": "PSEG email address",
+          "password": "PSEG password",
           "cookie": "Session cookie",
           "name": "Name"
         },
         "data_description": {
-          "cookie": "The Cookie header from a logged-in MySmartEnergy session.",
+          "auth_mode": "Automatic sign-in needs your PSEG account credentials; cookie mode uses a session you already have in a browser.",
+          "email": "The email address you use at mysmartenergy.psegliny.com.",
+          "password": "Stored in Home Assistant's config entry and only sent to mysmartenergy.psegliny.com.",
+          "cookie": "Only needed in cookie mode. The Cookie header from a logged-in MySmartEnergy session.",
           "name": "Friendly name for this PSEG account."
         }
       },
       "reauth_confirm": {
         "title": "Refresh the PSEG session",
-        "description": "The session cookie for PSEG Long Island has expired. Log in at mysmartenergy.psegliny.com again and paste a fresh Cookie header.",
+        "description": "The PSEG session has expired. With a stored password this completes on its own; otherwise log in at mysmartenergy.psegliny.com again and paste a fresh Cookie header.",
         "data": {
+          "auth_mode": "Sign-in method",
+          "email": "PSEG email address",
+          "password": "PSEG password",
           "cookie": "Session cookie"
+        },
+        "data_description": {
+          "auth_mode": "Switch to a session cookie if your account asks for a verification code.",
+          "email": "The email address you use at mysmartenergy.psegliny.com.",
+          "password": "Leave empty to keep the stored password.",
+          "cookie": "Only needed in cookie mode."
         }
       }
     },
     "error": {
-      "invalid_auth": "PSEG rejected that cookie. Copy the Cookie header from a page that is actually logged in.",
+      "invalid_auth": "PSEG rejected those credentials or that cookie.",
       "cannot_connect": "Could not reach the PSEG portal. Try again in a few minutes.",
-      "unknown": "Unexpected error. Check the Home Assistant log for details."
+      "unknown": "Unexpected error. Check the Home Assistant log for details.",
+      "credentials_required": "Enter both the PSEG email address and password, or switch to the session cookie method.",
+      "cookie_required": "Paste the Cookie header from a logged-in MySmartEnergy session.",
+      "verification_required": "PSEG asked for a security question, verification code, reCAPTCHA or password change. Sign in at mysmartenergy.psegliny.com by hand and use the session cookie method instead."
     },
     "abort": {
       "already_configured": "PSEG Long Island is already configured.",
@@ -65,6 +83,14 @@
           "backfill_days": "How much history to download on first setup. 0 disables the automatic backfill.",
           "timestamp_offset_minutes": "Only change this if PSEG timestamps look shifted in your timezone. Positive values move readings later."
         }
+      }
+    }
+  },
+  "selector": {
+    "auth_mode": {
+      "options": {
+        "password": "Email and password (sign in automatically)",
+        "cookie": "Browser session cookie"
       }
     }
   },
