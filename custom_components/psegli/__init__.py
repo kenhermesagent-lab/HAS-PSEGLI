@@ -35,6 +35,7 @@ from .const import (
 )
 from .coordinator import PsegliCoordinator
 from .exceptions import PsegliError
+from .session_log import SessionLog
 from .statistics import async_has_statistics
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,10 +65,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         if not coordinators:
             raise HomeAssistantError("PSEG Long Island is not configured")
 
-        reports = [
-            await coordinator.client.async_diagnose()
-            for coordinator in coordinators
-        ]
+        reports = []
+        for coordinator in coordinators:
+            report = await coordinator.client.async_diagnose()
+            if coordinator.session_log is not None:
+                report["session_log"] = await coordinator.session_log.async_events()
+            reports.append(report)
         if len(reports) == 1:
             return reports[0]
         return {"entries": reports}
@@ -148,6 +151,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entry, data={**entry.data, CONF_COOKIE: cookie}
         )
 
+    session_log = SessionLog(hass, entry.entry_id)
+
+    def _async_record_session_event(event: dict[str, Any]) -> None:
+        """Persist a rejection or recovery without delaying the request."""
+        hass.async_create_background_task(
+            hass, session_log.async_add(event), "psegli session log"
+        )
+
     client = PsegliClient(
         session,
         entry.data.get(CONF_COOKIE, ""),
@@ -155,8 +166,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         password=entry.data.get(CONF_PASSWORD),
         timestamp_offset_minutes=offset,
         on_cookie_refresh=_async_store_cookie,
+        on_session_event=_async_record_session_event,
     )
-    coordinator = PsegliCoordinator(hass, entry, client)
+    coordinator = PsegliCoordinator(hass, entry, client, session_log=session_log)
     # Cookie refreshes update the entry's data, which also notifies update
     # listeners; remember the options so those notifications do not turn into
     # an endless refresh loop.
@@ -250,6 +262,11 @@ async def _async_initial_backfill(
         await coordinator.async_backfill(days)
     except Exception:  # noqa: BLE001 - a failed backfill must not break setup
                 _LOGGER.warning("Initial PSEG backfill failed", exc_info=True)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Drop the stored session timeline when the entry is deleted."""
+    await SessionLog(hass, entry.entry_id).async_remove()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -17,6 +17,7 @@ from .const import (
     COST_STATISTIC_ID,
     USAGE_STATISTIC_ID,
 )
+from .session_log import SessionLog
 from .statistics import async_statistics_coverage
 
 
@@ -46,6 +47,13 @@ async def async_get_config_entry_diagnostics(
     }
 
     coordinator = getattr(entry, "runtime_data", None)
+    # The timeline lives on disk, so it is readable even when setup failed -
+    # which is exactly when the diagnostics are worth downloading.
+    session_log = getattr(coordinator, "session_log", None) or SessionLog(
+        hass, entry.entry_id
+    )
+    report["session_log"] = await session_log.async_events()
+
     if coordinator is None:
         report["session"] = {"available": False}
         return report
@@ -74,6 +82,7 @@ async def async_get_config_entry_diagnostics(
         "keep_alive": coordinator.client.keep_alive_stats,
         "cookie_expiry": coordinator.client.cookie_expiry(),
         "recent_auth_failures": coordinator.client.recent_auth_failures,
+        "session_events_stored": len(report["session_log"]),
     }
     report["data"] = {
         "intervals": len(data.points) if data else 0,

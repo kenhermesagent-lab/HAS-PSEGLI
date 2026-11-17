@@ -42,7 +42,7 @@ Credentials live in Home Assistant's `.storage` and are only sent to `mysmartene
 
 A pasted cookie that dies on a regular half-hour beat is telling you something specific: the portal's own session lifetime ended, not the integration's polling. The integration cannot extend a session the server ends, but it can show you exactly when and how it ended, and it no longer falls over on a single bad answer.
 
-- Every rejected request is recorded - when, which request, and what PSEG answered - in **Download diagnostics** and in the `psegli.check_session` result. Cookie values never appear there.
+- Every rejected request is recorded - when, which request, and what PSEG answered - in **Download diagnostics** and in the `psegli.check_session` result. Cookie values never appear there. The timeline is kept for seven days in Home Assistant's own storage, so it survives restarts and a pattern over several days is visible; deleting the integration entry deletes it.
 - Keep-alive failures are logged at warning level, so the log shows the session dying at keep-alive granularity instead of only at the next poll.
 - One rejected poll now keeps the integration loaded and retrying. Only a second rejection in a row asks you for a fresh cookie, and if the session recovers on its own nothing happens at all.
 

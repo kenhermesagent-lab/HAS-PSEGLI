@@ -185,6 +185,7 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
     session: aiohttp.ClientSession
     base_url: str
     refreshed: list[str]
+    events: list[dict[str, Any]]
 
     async def asyncSetUp(self) -> None:
         self.portal = FakePortal()
@@ -196,6 +197,7 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
         self.base_url = f"http://127.0.0.1:{port}"
         self.session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True))
         self.refreshed = []
+        self.events = []
 
     async def asyncTearDown(self) -> None:
         await self.session.close()
@@ -215,6 +217,7 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
             password=password,
             base_url=self.base_url,
             on_cookie_refresh=self.refreshed.append,
+            on_session_event=self.events.append,
         )
 
     async def fetch(self, client: Any) -> list[Any]:
@@ -413,6 +416,27 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(age)
         self.assertGreaterEqual(client.session_age_minutes, age)
+
+    async def test_a_recovered_session_is_recorded(self) -> None:
+        self.portal.fail_chart_once = True
+        client = self.client(f"MM_SID={self.portal.new_session()}")
+
+        await self.fetch(client)
+
+        self.assertEqual(
+            [event["kind"] for event in self.events], ["rejected", "recovered"]
+        )
+        self.assertIn("after 1 rejected", self.events[-1]["reason"])
+
+    async def test_a_dead_session_records_no_recovery(self) -> None:
+        client = self.client("MM_SID=stale")
+
+        with self.assertRaises(exceptions.PsegliAuthError):
+            await self.fetch(client)
+
+        self.assertTrue(self.events)
+        self.assertEqual({event["kind"] for event in self.events}, {"rejected"})
+        self.assertNotIn("stale", json.dumps(self.events))
 
     async def test_diagnose_reports_a_working_session(self) -> None:
         sid = self.portal.new_session()

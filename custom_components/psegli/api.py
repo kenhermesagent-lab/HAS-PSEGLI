@@ -100,6 +100,7 @@ class PsegliClient:
         base_url: str = BASE_URL,
         timestamp_offset_minutes: int = 0,
         on_cookie_refresh: Callable[[str], None] | None = None,
+        on_session_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if isinstance(session.cookie_jar, aiohttp.DummyCookieJar):
             raise ValueError("PsegliClient needs a session with a real cookie jar")
@@ -109,6 +110,7 @@ class PsegliClient:
         self._email = (email or "").strip() or None
         self._password = password or None
         self._on_cookie_refresh = on_cookie_refresh
+        self._on_session_event = on_session_event
         self._offset = int(timestamp_offset_minutes or 0)
         self._stored_cookie = ""
         self._login_lock = asyncio.Lock()
@@ -538,18 +540,43 @@ class PsegliClient:
         self._auth_failures += 1
         event: dict[str, Any] = {
             "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "kind": "rejected",
             "request": request,
             "reason": reason,
         }
         if status is not None:
             event["status"] = status
         self._auth_events.append(event)
+        self._notify_session_event(event)
 
     def _note_session_ok(self) -> None:
         """Start the session clock on the first accepted request."""
         if self._session_since is None:
             self._session_since = time.monotonic()
+        if self._auth_failures:
+            # Worth recording: it is the difference between a session that died
+            # and a request that was merely bounced.
+            self._notify_session_event(
+                {
+                    "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "kind": "recovered",
+                    "request": "session accepted again",
+                    "reason": (
+                        f"accepted again after {self._auth_failures} rejected "
+                        "request(s)"
+                    ),
+                }
+            )
         self._auth_failures = 0
+
+    def _notify_session_event(self, event: Mapping[str, Any]) -> None:
+        """Hand an event to the caller that persists the timeline."""
+        if self._on_session_event is None:
+            return
+        try:
+            self._on_session_event(dict(event))
+        except Exception:  # noqa: BLE001 - logging must never break polling
+            _LOGGER.debug("Could not record a PSEG session event", exc_info=True)
 
     def cookie_expiry(self) -> dict[str, str | None]:
         """Return each live cookie's expiry, or None for a session cookie."""

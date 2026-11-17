@@ -34,6 +34,7 @@ from .parser import (
     aggregate,
     latest_point,
 )
+from .session_log import SessionLog
 from .statistics import async_import_usage
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,7 +54,12 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
     """Poll the MySmartEnergy portal and keep statistics in sync."""
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, client: PsegliClient
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        client: PsegliClient,
+        *,
+        session_log: SessionLog | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -63,6 +69,7 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
         )
         self.entry = entry
         self.client = client
+        self.session_log = session_log
         self.time_zone: tzinfo = (
             dt_util.get_time_zone(hass.config.time_zone) or timezone.utc
         )
