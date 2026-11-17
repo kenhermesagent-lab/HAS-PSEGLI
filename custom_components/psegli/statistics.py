@@ -90,6 +90,47 @@ async def async_has_statistics(hass: HomeAssistant, statistic_id: str) -> bool:
     return start is not None
 
 
+def _as_iso(value: Any) -> str | None:
+    return value.isoformat() if isinstance(value, datetime) else None
+
+
+async def async_statistics_coverage(
+    hass: HomeAssistant, statistic_id: str
+) -> dict[str, Any]:
+    """Summarise the stored rows of one statistic for diagnostics."""
+    try:
+        instance = get_instance(hass)
+    except KeyError:
+        return {"available": False, "reason": "recorder not ready"}
+
+    now = datetime.now(timezone.utc)
+    try:
+        rows = await instance.async_add_executor_job(
+            statistics_during_period,
+            hass,
+            now - _WIDE_LOOKBACK,
+            now,
+            [statistic_id],
+            "hour",
+            None,
+            {"start", "sum"},
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must never raise
+        _LOGGER.debug("Could not read statistics for %s", statistic_id, exc_info=True)
+        return {"available": False, "reason": "query failed"}
+
+    entries = rows.get(statistic_id) or []
+    if not entries:
+        return {"available": True, "rows": 0}
+    return {
+        "available": True,
+        "rows": len(entries),
+        "first": _as_iso(entries[0].get("start")),
+        "last": _as_iso(entries[-1].get("start")),
+        "last_sum": entries[-1].get("sum"),
+    }
+
+
 def _metadata(statistic_id: str, name: str, unit: str) -> dict[str, Any]:
     return {
         "statistic_id": statistic_id,

@@ -137,6 +137,14 @@ PSEG keeps sub-daily interval data for about 13 months. The import rewrites the 
 
 **Timestamps off by an hour or more** — set *Timestamp correction* in the options. Positive values move readings later.
 
+**Checking the session without reading logs**
+
+Run the `psegli.check_session` action from **Developer Tools → Actions** with *Return response* enabled. It walks the chain — reach the portal, load the login page, open the dashboard with the stored session, sign in automatically, download chart data — and returns PSEG's own message at the step that fails. It performs one deliberate sign-in attempt if the session is dead, which also resolves a "Re-authenticate" prompt when a password is stored.
+
+**Diagnostics**
+
+**Settings → Devices & Services → PSEG Long Island → Download diagnostics** returns a redacted snapshot: sign-in method, cookie names (never values), the last update result and exception, and how far back the usage and cost statistics reach.
+
 **Debug logging**
 
 ```yaml

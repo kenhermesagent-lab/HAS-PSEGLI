@@ -7,7 +7,7 @@ import inspect
 import json
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable, Mapping, MutableMapping
 from urllib.parse import urlparse
 
@@ -161,8 +161,12 @@ class PsegliClient:
         await self._async_dashboard_token()
         self._persist_cookie()
 
-    async def async_login(self) -> None:
-        """Sign in with the stored username and password."""
+    async def async_login(self, *, force: bool = False) -> None:
+        """Sign in with the stored username and password.
+
+        ``force`` is only used by the diagnostics action, where the user asked
+        for one deliberate attempt; polling always respects the cooldown.
+        """
         if not self.can_login:
             raise PsegliLoginRequired(
                 "No PSEG username and password are stored, so a new session "
@@ -170,16 +174,12 @@ class PsegliClient:
             )
 
         async with self._login_lock:
-            now = time.monotonic()
-            if (
-                self._last_login_attempt
-                and now - self._last_login_attempt < LOGIN_COOLDOWN
-            ):
+            if not force and self._cooldown_remaining():
                 raise PsegliLoginRequired(
                     "PSEG rejected the session and a sign-in was already tried "
                     "in the last few minutes"
                 )
-            self._last_login_attempt = now
+            self._last_login_attempt = time.monotonic()
             await self._async_perform_login()
             self._persist_cookie(force=True)
 
@@ -204,7 +204,11 @@ class PsegliClient:
 
     async def _async_fetch_points(self, start: date, end: date) -> list[UsagePoint]:
         token = await self._async_dashboard_token()
+        return await self._async_chart(token, start, end)
 
+    async def _async_chart(
+        self, token: str, start: date, end: date
+    ) -> list[UsagePoint]:
         form = {
             "__RequestVerificationToken": token,
             "UsageInterval": "5",  # hourly
@@ -300,6 +304,13 @@ class PsegliClient:
 
         # Trust only a dashboard that actually renders with the new cookies.
         await self._async_dashboard_token()
+
+    def _cooldown_remaining(self) -> int:
+        """Return how many seconds of the sign-in cooldown are left."""
+        if not self._last_login_attempt:
+            return 0
+        remaining = LOGIN_COOLDOWN - (time.monotonic() - self._last_login_attempt)
+        return max(0, int(remaining))
 
     @staticmethod
     def _raise_for_login_challenge(payload: Mapping[str, Any]) -> None:
@@ -425,3 +436,136 @@ class PsegliClient:
             for item in (payload or {}).get("AjaxResults") or []:
                 if str(item.get("Action", "")).lower() == "redirect":
                     raise PsegliAuthError("PSEG rejected the session cookie")
+
+    async def async_diagnose(self) -> dict[str, Any]:
+        """Walk the sign-in and data path and report where it stops.
+
+        The stored session is checked first and the login page is only fetched
+        when it is already dead, so running this never disturbs a working
+        session.  No cookie value or password appears in the result.
+        """
+        steps: list[dict[str, Any]] = []
+        report: dict[str, Any] = {
+            "base_url": self._base_url,
+            "sign_in_method": "email and password" if self.can_login else "cookie",
+            "stored_cookie_names": sorted(parse_cookie_header(self._stored_cookie)),
+            "cooldown_seconds": self._cooldown_remaining(),
+            "steps": steps,
+            "ok": False,
+            "summary": "",
+        }
+
+        # 1. Does the stored session still open the dashboard?
+        session_ok = False
+        dashboard_token = ""
+        try:
+            dashboard_token = await self._async_dashboard_token()
+        except PsegliAuthError as err:
+            steps.append({"step": "open the dashboard", "ok": False, "error": str(err)})
+        except PsegliError as err:
+            steps.append({"step": "open the dashboard", "ok": False, "error": str(err)})
+            report["summary"] = "The PSEG portal could not be reached."
+            return report
+        else:
+            session_ok = True
+            steps.append({"step": "open the dashboard", "ok": True})
+
+        if not session_ok:
+            # 2. The session is gone, so it is safe to load the login page and
+            # check the antiforgery token a sign-in needs.
+            try:
+                _url, html, _content_type = await self._async_request(
+                    "GET", "/", headers=HTML_HEADERS, referer=f"{self._base_url}/"
+                )
+            except PsegliError as err:
+                steps.append({"step": "load the login page", "ok": False, "error": str(err)})
+                report["summary"] = "The PSEG login page could not be reached."
+                return report
+
+            token = extract_request_verification_token(html)
+            steps.append(
+                {
+                    "step": "load the login page",
+                    "ok": token is not None,
+                    "antiforgery_token_found": token is not None,
+                }
+            )
+
+            if not self.can_login:
+                steps.append(
+                    {
+                        "step": "sign in automatically",
+                        "ok": False,
+                        "error": "no username and password are stored",
+                    }
+                )
+                report["summary"] = (
+                    "The stored cookie is no longer accepted and no password is "
+                    "stored. Paste a fresh cookie or switch to email and password."
+                )
+                return report
+
+            # 3. One deliberate sign-in attempt.
+            try:
+                await self.async_login(force=True)
+            except PsegliAuthError as err:
+                steps.append(
+                    {"step": "sign in automatically", "ok": False, "error": str(err)}
+                )
+                report["summary"] = f"PSEG rejected the sign-in: {err}"
+                return report
+            except PsegliError as err:
+                steps.append(
+                    {"step": "sign in automatically", "ok": False, "error": str(err)}
+                )
+                report["summary"] = "The sign-in request failed before PSEG answered."
+                return report
+
+            steps.append({"step": "sign in automatically", "ok": True})
+            try:
+                dashboard_token = await self._async_dashboard_token()
+            except PsegliError as err:
+                steps.append(
+                    {
+                        "step": "open the dashboard after signing in",
+                        "ok": False,
+                        "error": str(err),
+                    }
+                )
+                report["summary"] = (
+                    "PSEG accepted the sign-in but the dashboard still refused "
+                    "the new session."
+                )
+                return report
+            steps.append({"step": "open the dashboard after signing in", "ok": True})
+
+        # 4. Can the chart endpoints be read?
+        today = date.today()
+        try:
+            points = await self._async_chart(
+                dashboard_token, today - timedelta(days=1), today
+            )
+        except PsegliError as err:
+            steps.append({"step": "download chart data", "ok": False, "error": str(err)})
+            report["summary"] = (
+                "The session is accepted but the usage data could not be "
+                f"downloaded: {err}"
+            )
+            return report
+
+        steps.append(
+            {
+                "step": "download chart data",
+                "ok": True,
+                "intervals_returned": len(points),
+            }
+        )
+
+        self._persist_cookie()
+        report["ok"] = True
+        report["summary"] = (
+            "The session is alive and PSEG returned "
+            f"{len(points)} intervals for the last day."
+        )
+        report["cookie_names"] = sorted(parse_cookie_header(self.current_cookie()))
+        return report

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.event import async_track_time_interval
@@ -26,6 +27,7 @@ from .const import (
     MAX_BACKFILL_DAYS,
     PLATFORMS,
     SERVICE_BACKFILL,
+    SERVICE_CHECK_SESSION,
     USAGE_STATISTIC_ID,
 )
 from .coordinator import PsegliCoordinator
@@ -53,9 +55,30 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         for coordinator in coordinators:
             await coordinator.async_backfill(days)
 
+    async def _async_handle_check_session(call: ServiceCall) -> dict[str, Any]:
+        """Report where the PSEG session stops working, step by step."""
+        coordinators = list(hass.data.get(DOMAIN, {}).values())
+        if not coordinators:
+            raise HomeAssistantError("PSEG Long Island is not configured")
+
+        reports = [
+            await coordinator.client.async_diagnose()
+            for coordinator in coordinators
+        ]
+        if len(reports) == 1:
+            return reports[0]
+        return {"entries": reports}
+
     if not hass.services.has_service(DOMAIN, SERVICE_BACKFILL):
         hass.services.async_register(
             DOMAIN, SERVICE_BACKFILL, _async_handle_backfill
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_CHECK_SESSION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CHECK_SESSION,
+            _async_handle_check_session,
+            supports_response=SupportsResponse.ONLY,
         )
     return True
 

@@ -116,6 +116,10 @@
     "backfill": {
       "name": "Backfill usage",
       "description": "Download historical hourly usage from PSEG and import it into long-term statistics."
+    },
+    "check_session": {
+      "name": "Check session",
+      "description": "Test the stored PSEG session step by step and return what PSEG answered. Nothing is changed apart from one sign-in attempt when the session is dead."
     }
   }
 }

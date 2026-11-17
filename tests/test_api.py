@@ -8,6 +8,7 @@ chart data), so the session logic can be exercised without PSEG.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -305,6 +306,66 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
             await client.async_keep_alive()
 
         self.assertEqual(self.portal.login_attempts, 0)
+
+    async def test_diagnose_reports_a_working_session(self) -> None:
+        sid = self.portal.new_session()
+        client = self.client(f"MM_SID={sid}")
+
+        report = await client.async_diagnose()
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(self.portal.login_attempts, 0)
+        steps = {step["step"]: step for step in report["steps"]}
+        self.assertTrue(steps["open the dashboard"]["ok"])
+        self.assertTrue(steps["download chart data"]["ok"])
+        self.assertEqual(steps["download chart data"]["intervals_returned"], 1)
+        # A live session must not be disturbed by touching the login page.
+        self.assertNotIn("load the login page", steps)
+        self.assertNotIn("sign in automatically", steps)
+
+    async def test_diagnose_signs_in_when_the_cookie_is_dead(self) -> None:
+        client = self.client("MM_SID=stale", email=EMAIL, password=PASSWORD)
+
+        report = await client.async_diagnose()
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(self.portal.login_attempts, 1)
+        steps = {step["step"]: step for step in report["steps"]}
+        self.assertFalse(steps["open the dashboard"]["ok"])
+        self.assertTrue(steps["load the login page"]["antiforgery_token_found"])
+        self.assertTrue(steps["sign in automatically"]["ok"])
+        self.assertTrue(steps["open the dashboard after signing in"]["ok"])
+
+    async def test_diagnose_quotes_the_rejection(self) -> None:
+        client = self.client("MM_SID=stale", email=EMAIL, password="wrong password")
+
+        report = await client.async_diagnose()
+
+        self.assertFalse(report["ok"])
+        self.assertIn("Invalid email address", report["summary"])
+        steps = {step["step"]: step for step in report["steps"]}
+        self.assertFalse(steps["sign in automatically"]["ok"])
+
+    async def test_diagnose_explains_a_missing_password(self) -> None:
+        client = self.client("MM_SID=stale")
+
+        report = await client.async_diagnose()
+
+        self.assertFalse(report["ok"])
+        steps = {step["step"]: step for step in report["steps"]}
+        self.assertIn(
+            "no username and password", steps["sign in automatically"]["error"]
+        )
+
+    async def test_diagnose_never_leaks_credentials(self) -> None:
+        client = self.client("MM_SID=stale", email=EMAIL, password=PASSWORD)
+
+        report = await client.async_diagnose()
+        dumped = json.dumps(report)
+
+        self.assertNotIn(PASSWORD, dumped)
+        self.assertNotIn("stale", dumped)
+        self.assertEqual(report["stored_cookie_names"], ["MM_SID"])
 
     def test_cookie_header_round_trip(self) -> None:
         header = api.normalize_cookie(
