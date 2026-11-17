@@ -18,6 +18,7 @@ from .const import (
     USAGE_STATISTIC_ID,
 )
 from .session_log import SessionLog
+from .session_timeline import summarize_events
 from .statistics import async_statistics_coverage
 
 
@@ -53,6 +54,7 @@ async def async_get_config_entry_diagnostics(
         hass, entry.entry_id
     )
     report["session_log"] = await session_log.async_events()
+    report["session_summary"] = summarize_events(report["session_log"])
 
     if coordinator is None:
         report["session"] = {"available": False}

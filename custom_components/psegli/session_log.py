@@ -14,50 +14,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable, Mapping
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN
+from .session_timeline import prune_events
 
 _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.session_log"
-#: A week is enough to see a daily or half-hourly pattern, and small enough to
-#: keep the file trivial.
-MAX_AGE = timedelta(days=7)
-MAX_EVENTS = 200
-
-
-def _parse_timestamp(value: Any) -> datetime | None:
-    """Parse the ISO timestamp stored with an event."""
-    try:
-        parsed = datetime.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def prune_events(
-    events: Iterable[Any], *, now: datetime | None = None
-) -> list[dict[str, Any]]:
-    """Drop malformed and stale events, keeping the newest ones."""
-    cutoff = (now or datetime.now(timezone.utc)) - MAX_AGE
-    kept: list[dict[str, Any]] = []
-    for event in events:
-        if not isinstance(event, Mapping):
-            continue
-        stamp = _parse_timestamp(event.get("at"))
-        if stamp is None or stamp < cutoff:
-            continue
-        kept.append(dict(event))
-    return kept[-MAX_EVENTS:]
 
 
 class SessionLog:

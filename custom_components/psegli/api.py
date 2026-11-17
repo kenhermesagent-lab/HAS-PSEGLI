@@ -543,6 +543,7 @@ class PsegliClient:
             "kind": "rejected",
             "request": request,
             "reason": reason,
+            "session_age_minutes": self.session_age_minutes,
         }
         if status is not None:
             event["status"] = status
@@ -565,6 +566,7 @@ class PsegliClient:
                         f"accepted again after {self._auth_failures} rejected "
                         "request(s)"
                     ),
+                    "session_age_minutes": self.session_age_minutes,
                 }
             )
         self._auth_failures = 0

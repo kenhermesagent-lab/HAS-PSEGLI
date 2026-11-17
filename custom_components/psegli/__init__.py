@@ -36,6 +36,7 @@ from .const import (
 from .coordinator import PsegliCoordinator
 from .exceptions import PsegliError
 from .session_log import SessionLog
+from .session_timeline import summarize_events
 from .statistics import async_has_statistics
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,8 +69,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         reports = []
         for coordinator in coordinators:
             report = await coordinator.client.async_diagnose()
-            if coordinator.session_log is not None:
-                report["session_log"] = await coordinator.session_log.async_events()
+            session_log = coordinator.session_log
+            if session_log is not None:
+                events = await session_log.async_events()
+                report["session_log"] = events
+                report["session_summary"] = summarize_events(events)
             reports.append(report)
         if len(reports) == 1:
             return reports[0]
