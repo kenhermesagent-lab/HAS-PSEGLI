@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .api import PsegliClient
 from .const import (
+    AUTH_FAILURES_BEFORE_REAUTH,
     CONF_BACKFILL_DAYS,
     CONF_TIMESTAMP_OFFSET,
     DEFAULT_BACKFILL_DAYS,
@@ -66,6 +67,12 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
             dt_util.get_time_zone(hass.config.time_zone) or timezone.utc
         )
         self.tariff = Tariff.from_options(entry.options)
+        self._auth_failures = 0
+
+    @property
+    def consecutive_auth_failures(self) -> int:
+        """Return how many polls in a row came back unauthenticated."""
+        return self._auth_failures
 
     async def _async_update_data(self) -> PsegliData:
         try:
@@ -80,9 +87,23 @@ class PsegliCoordinator(DataUpdateCoordinator[PsegliData]):
         try:
             points = await self.client.async_fetch_points(start, now_local.date())
         except PsegliAuthError as err:
+            # A single rejected poll is not worth unloading the entry over: the
+            # portal answers with a login page for reasons that are not an
+            # expired session.  Keep polling, and only ask the user for a fresh
+            # cookie once the rejection repeats.
+            self._auth_failures += 1
+            if self._auth_failures < AUTH_FAILURES_BEFORE_REAUTH:
+                _LOGGER.warning(
+                    "PSEG rejected the session (%s); retrying at the next poll "
+                    "before asking for a new cookie",
+                    err,
+                )
+                raise UpdateFailed(str(err)) from err
             raise ConfigEntryAuthFailed(str(err)) from err
         except PsegliError as err:
             raise UpdateFailed(str(err)) from err
+
+        self._auth_failures = 0
 
         self.tariff = Tariff.from_options(self.entry.options)
 

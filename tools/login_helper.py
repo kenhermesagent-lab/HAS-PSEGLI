@@ -117,7 +117,17 @@ def main() -> int:
                 return 1
 
             cookie = _cookie_header(cookies)
-            print("Captured cookies:", ", ".join(sorted(c["name"] for c in cookies)))
+            described = []
+            for item in sorted(cookies, key=lambda entry: entry["name"]):
+                expiry = item.get("expires")
+                if not expiry or float(expiry) < 0:
+                    described.append(f"{item['name']} (session)")
+                else:
+                    described.append(
+                        f"{item['name']} (expires "
+                        f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(expiry))})"
+                    )
+            print("Captured cookies:", ", ".join(described))
 
             if args.ha_url and args.token:
                 _push_to_home_assistant(args.ha_url, args.token, cookie)

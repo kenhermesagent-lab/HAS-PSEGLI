@@ -72,6 +72,7 @@ class FakePortal:
         self.last_login_headers: dict[str, str] = {}
         self.captcha_message: str | None = None
         self.accept_login_without_session = False
+        self.fail_chart_once = False
         self._counter = 0
 
     def new_session(self) -> str:
@@ -138,6 +139,11 @@ class FakePortal:
 
     async def chart(self, request: web.Request) -> web.Response:
         if not self._logged_in(request):
+            raise web.HTTPFound("/Home/Login")
+        if self.fail_chart_once:
+            # A busy portal answers one AJAX request with a login redirect even
+            # though the session is fine.
+            self.fail_chart_once = False
             raise web.HTTPFound("/Home/Login")
         await request.post()
         response = web.json_response({"AjaxResults": [], "Data": {}})
@@ -355,6 +361,58 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
             await client.async_keep_alive()
 
         self.assertEqual(self.portal.login_attempts, 0)
+
+    async def test_one_bounced_data_request_does_not_end_the_session(self) -> None:
+        self.portal.fail_chart_once = True
+        client = self.client(f"MM_SID={self.portal.new_session()}")
+
+        points = await self.fetch(client)
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(self.portal.login_attempts, 0)
+        self.assertEqual(client.consecutive_auth_failures, 0)
+        self.assertEqual(
+            client.recent_auth_failures[-1]["request"], "POST /Dashboard/Chart"
+        )
+
+    async def test_a_dead_cookie_records_the_rejection(self) -> None:
+        client = self.client("MM_SID=stale")
+
+        with self.assertRaises(exceptions.PsegliAuthError):
+            await self.fetch(client)
+
+        self.assertIsNone(client.session_age_minutes)
+        self.assertTrue(client.recent_auth_failures)
+        self.assertEqual(
+            client.recent_auth_failures[-1]["request"], "GET /Dashboard"
+        )
+        self.assertIn("login page", client.recent_auth_failures[-1]["reason"])
+        self.assertNotIn("stale", json.dumps(client.recent_auth_failures))
+
+    async def test_keep_alive_records_success_and_failure(self) -> None:
+        client = self.client(f"MM_SID={self.portal.new_session()}")
+
+        await client.async_keep_alive()
+
+        self.assertIsNotNone(client.keep_alive_stats["last_ok"])
+        self.assertIsNotNone(client.session_age_minutes)
+        self.assertIn("MM_SID", client.cookie_expiry())
+
+        self.portal.valid_sessions.clear()
+        with self.assertRaises(exceptions.PsegliAuthError):
+            await client.async_keep_alive()
+
+        self.assertEqual(client.keep_alive_stats["consecutive_failures"], 1)
+
+    async def test_session_age_restarts_only_with_a_new_session(self) -> None:
+        client = self.client(f"MM_SID={self.portal.new_session()}")
+
+        await self.fetch(client)
+        age = client.session_age_minutes
+        await self.fetch(client)
+
+        self.assertIsNotNone(age)
+        self.assertGreaterEqual(client.session_age_minutes, age)
 
     async def test_diagnose_reports_a_working_session(self) -> None:
         sid = self.portal.new_session()

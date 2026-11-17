@@ -38,6 +38,21 @@ Home Assistant also touches the dashboard every 10 minutes. MyMeter expires a se
 
 Credentials live in Home Assistant's `.storage` and are only sent to `mysmartenergy.psegliny.com`.
 
+### When the session dies after about half an hour
+
+A pasted cookie that dies on a regular half-hour beat is telling you something specific: the portal's own session lifetime ended, not the integration's polling. The integration cannot extend a session the server ends, but it can show you exactly when and how it ended, and it no longer falls over on a single bad answer.
+
+- Every rejected request is recorded - when, which request, and what PSEG answered - in **Download diagnostics** and in the `psegli.check_session` result. Cookie values never appear there.
+- Keep-alive failures are logged at warning level, so the log shows the session dying at keep-alive granularity instead of only at the next poll.
+- One rejected poll now keeps the integration loaded and retrying. Only a second rejection in a row asks you for a fresh cookie, and if the session recovers on its own nothing happens at all.
+
+If it keeps landing on the same interval, check two things in the report:
+
+1. `session_age_minutes` and `recent_auth_failures`. The same age at every failure with a working keep-alive is a server-side cap: nothing the integration sends resets it, and a shorter keep-alive will not help. The remaining choices are automatic sign-in with the password, once PSEG stops challenging it, or a fresh cookie when the session lapses.
+2. Whether a browser is still signed in to the portal. PSEG hands out a new session cookie as the site is used, so a tab left open on it can take the session that Home Assistant is holding, and the cookie you pasted stops matching. Close the helper's browser window - it does that itself - and treat any further browsing as needing a new cookie afterwards.
+
+Setting the keep-alive longer than the portal's session lifetime is the one thing guaranteed to cause this: the touch arrives after the session has already gone. Ten minutes, the default, is deliberately well inside it.
+
 ### When PSEG asks for a captcha
 
 PSEG puts reCAPTCHA in front of the login form but only demands it when it does not trust the request — a few automated attempts from Home Assistant's IP is enough. The integration does not try to solve it: as soon as PSEG asks for a captcha, automatic sign-in pauses and the entry asks you for a session cookie instead, so the captcha is not fed and the account is not hammered.

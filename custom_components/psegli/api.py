@@ -7,7 +7,8 @@ import inspect
 import json
 import logging
 import time
-from datetime import date, timedelta
+from collections import deque
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, MutableMapping
 from urllib.parse import urlparse
 
@@ -113,6 +114,13 @@ class PsegliClient:
         self._login_lock = asyncio.Lock()
         self._last_login_attempt = 0.0
         self._login_blocked = ""
+        #: When the current cookie was first accepted, so a session that keeps
+        #: dying can be distinguished from one that was never valid.
+        self._session_since: float | None = None
+        self._keep_alive_ok_utc: datetime | None = None
+        self._keep_alive_failures = 0
+        self._auth_failures = 0
+        self._auth_events: deque[dict[str, Any]] = deque(maxlen=10)
         self.update_cookie(cookie)
 
     # ------------------------------------------------------------------
@@ -128,6 +136,35 @@ class PsegliClient:
     def login_blocked(self) -> str | None:
         """Return why automatic sign-in is paused, or None when it is not."""
         return self._login_blocked or None
+
+    @property
+    def session_age_minutes(self) -> float | None:
+        """Return how long the current session has been in use, in minutes."""
+        if self._session_since is None:
+            return None
+        return round((time.monotonic() - self._session_since) / 60, 1)
+
+    @property
+    def keep_alive_stats(self) -> dict[str, Any]:
+        """Return when the session was last touched and how that went."""
+        return {
+            "last_ok": (
+                self._keep_alive_ok_utc.isoformat(timespec="seconds")
+                if self._keep_alive_ok_utc is not None
+                else None
+            ),
+            "consecutive_failures": self._keep_alive_failures,
+        }
+
+    @property
+    def consecutive_auth_failures(self) -> int:
+        """Return how many requests in a row were answered as unauthenticated."""
+        return self._auth_failures
+
+    @property
+    def recent_auth_failures(self) -> list[dict[str, Any]]:
+        """Return the last rejected requests, without any cookie values."""
+        return list(self._auth_events)
 
     def update_cookie(self, cookie: str) -> None:
         """Replace the stored session cookie and load it into the jar."""
@@ -166,7 +203,13 @@ class PsegliClient:
         session alive because it keeps making requests.  A cheap authenticated
         request does the same for a session that no browser is using.
         """
-        await self._async_dashboard_token()
+        try:
+            await self._async_dashboard_token()
+        except PsegliError:
+            self._keep_alive_failures += 1
+            raise
+        self._keep_alive_failures = 0
+        self._keep_alive_ok_utc = datetime.now(timezone.utc)
         self._persist_cookie()
 
     async def async_login(self, *, force: bool = False) -> None:
@@ -195,19 +238,54 @@ class PsegliClient:
             self._persist_cookie(force=True)
 
     async def async_fetch_points(self, start: date, end: date) -> list[UsagePoint]:
-        """Fetch hourly usage between two local dates (inclusive)."""
+        """Fetch hourly usage between two local dates (inclusive).
+
+        MyMeter answers a data request with a login page for reasons that have
+        nothing to do with an expired session: a recycled application pool, a
+        cookie rotation that has not landed yet, a chart state that timed out.
+        A single such answer must not throw away a working cookie, so the
+        dashboard is probed on its own before the session is declared dead.
+        """
         try:
             points = await self._async_fetch_points(start, end)
-        except PsegliAuthError:
-            if not self.can_login:
-                raise
-            _LOGGER.info("PSEG session expired, signing in again automatically")
-            await self.async_login()
-            points = await self._async_fetch_points(start, end)
+        except PsegliAuthError as err:
+            if await self._async_session_is_alive():
+                _LOGGER.info(
+                    "PSEG bounced one data request (%s); retrying with the same session",
+                    err,
+                )
+                try:
+                    points = await self._async_fetch_points(start, end)
+                except PsegliAuthError as retry_error:
+                    points = await self._async_recover(retry_error, start, end)
+            else:
+                points = await self._async_recover(err, start, end)
         # The portal rotates its session cookies while we browse; keep the
         # stored copy current so a restart does not need a new sign-in.
         self._persist_cookie()
         return points
+
+    async def _async_recover(
+        self, error: PsegliAuthError, start: date, end: date
+    ) -> list[UsagePoint]:
+        """Sign in when that is possible, otherwise report the dead session."""
+        if not self.can_login:
+            raise error
+        _LOGGER.info("PSEG session expired, signing in again automatically")
+        await self.async_login()
+        return await self._async_fetch_points(start, end)
+
+    async def _async_session_is_alive(self) -> bool:
+        """Probe the dashboard alone, without touching the data endpoints."""
+        try:
+            await self._async_dashboard_token()
+        except PsegliAuthError:
+            return False
+        except PsegliError:
+            # The portal could not be reached at all, which says nothing about
+            # the cookie; let the retry report the real problem.
+            return True
+        return True
 
     # ------------------------------------------------------------------
     # Internals
@@ -239,7 +317,7 @@ class PsegliClient:
         url, text, content_type = await self._async_request(
             "POST", CHART_PATH, data=form, headers=AJAX_HEADERS
         )
-        self._assert_logged_in(url, text, content_type)
+        self._assert_logged_in(url, text, content_type, "POST /Dashboard/Chart")
 
         cache_buster = str(int(time.time() * 1000))
         url, text, content_type = await self._async_request(
@@ -248,7 +326,7 @@ class PsegliClient:
             params={"_": cache_buster},
             headers=AJAX_HEADERS,
         )
-        self._assert_logged_in(url, text, content_type)
+        self._assert_logged_in(url, text, content_type, "GET /Dashboard/ChartData")
 
         try:
             payload = json.loads(text)
@@ -257,7 +335,9 @@ class PsegliClient:
                 "PSEG returned an unexpected response instead of chart data"
             ) from err
 
-        return parse_chart_payload(payload, self._offset)
+        points = parse_chart_payload(payload, self._offset)
+        self._note_session_ok()
+        return points
 
     async def _async_perform_login(self) -> None:
         """Load the login page, post the credentials and verify the session."""
@@ -381,13 +461,14 @@ class PsegliClient:
         url, text, content_type = await self._async_request(
             "GET", DASHBOARD_PATH, headers=HTML_HEADERS
         )
-        self._assert_logged_in(url, text, content_type)
+        self._assert_logged_in(url, text, content_type, "GET /Dashboard")
         token = extract_request_verification_token(text)
         if not token:
             raise PsegliAuthError(
                 "The PSEG dashboard loaded but no session token was found. "
                 "The cookie is probably incomplete or expired."
             )
+        self._note_session_ok()
         return token
 
     async def _async_request(
@@ -420,9 +501,11 @@ class PsegliClient:
             ) as response:
                 body = await response.text()
                 if response.status in (401, 403):
-                    raise PsegliAuthError(
-                        f"PSEG denied the request (HTTP {response.status})"
+                    reason = f"PSEG denied the request (HTTP {response.status})"
+                    self._record_auth_failure(
+                        f"{method} {path}", reason, response.status
                     )
+                    raise PsegliAuthError(reason)
                 if response.status >= 400:
                     raise PsegliError(f"PSEG returned HTTP {response.status}")
                 return (
@@ -448,14 +531,51 @@ class PsegliClient:
         except Exception:  # noqa: BLE001 - persistence must never break polling
             _LOGGER.debug("Could not store the refreshed PSEG cookie", exc_info=True)
 
-    @staticmethod
-    def _assert_logged_in(url: str, text: str, content_type: str) -> None:
+    def _record_auth_failure(
+        self, request: str, reason: str, status: int | None = None
+    ) -> None:
+        """Remember a rejected request so the timeline can be inspected later."""
+        self._auth_failures += 1
+        event: dict[str, Any] = {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "request": request,
+            "reason": reason,
+        }
+        if status is not None:
+            event["status"] = status
+        self._auth_events.append(event)
+
+    def _note_session_ok(self) -> None:
+        """Start the session clock on the first accepted request."""
+        if self._session_since is None:
+            self._session_since = time.monotonic()
+        self._auth_failures = 0
+
+    def cookie_expiry(self) -> dict[str, str | None]:
+        """Return each live cookie's expiry, or None for a session cookie."""
+        try:
+            filtered = self._session.cookie_jar.filter_cookies(
+                URL(f"{self._base_url}/")
+            )
+        except (AttributeError, KeyError, ValueError):  # pragma: no cover - safety
+            return {}
+        return {
+            name: (morsel["expires"] or None) for name, morsel in filtered.items()
+        }
+
+    def _assert_logged_in(
+        self, url: str, text: str, content_type: str, request: str = "request"
+    ) -> None:
         """Raise when the portal answered with a login page or AJAX redirect."""
         path = urlparse(url).path.lower()
         if "login" in path or path in ("", "/"):
-            raise PsegliAuthError("PSEG redirected to the login page")
+            reason = "PSEG redirected to the login page"
+            self._record_auth_failure(request, reason)
+            raise PsegliAuthError(reason)
         if "loginemail" in (text or "").lower():
-            raise PsegliAuthError("PSEG returned the login page")
+            reason = "PSEG returned the login page"
+            self._record_auth_failure(request, reason)
+            raise PsegliAuthError(reason)
         if "json" in content_type:
             try:
                 payload: Any = json.loads(text)
@@ -465,7 +585,9 @@ class PsegliClient:
                 return
             for item in (payload or {}).get("AjaxResults") or []:
                 if str(item.get("Action", "")).lower() == "redirect":
-                    raise PsegliAuthError("PSEG rejected the session cookie")
+                    reason = "PSEG rejected the session cookie"
+                    self._record_auth_failure(request, reason)
+                    raise PsegliAuthError(reason)
 
     async def async_diagnose(self) -> dict[str, Any]:
         """Walk the sign-in and data path and report where it stops.
@@ -481,6 +603,9 @@ class PsegliClient:
             "stored_cookie_names": sorted(parse_cookie_header(self._stored_cookie)),
             "cooldown_seconds": self._cooldown_remaining(),
             "login_blocked": self.login_blocked,
+            "session_age_minutes": self.session_age_minutes,
+            "keep_alive": self.keep_alive_stats,
+            "consecutive_auth_failures": self.consecutive_auth_failures,
             "steps": steps,
             "ok": False,
             "summary": "",
@@ -599,4 +724,6 @@ class PsegliClient:
             f"{len(points)} intervals for the last day."
         )
         report["cookie_names"] = sorted(parse_cookie_header(self.current_cookie()))
+        report["cookie_expiry"] = self.cookie_expiry()
+        report["recent_auth_failures"] = self.recent_auth_failures
         return report

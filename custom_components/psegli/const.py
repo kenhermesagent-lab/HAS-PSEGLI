@@ -67,6 +67,10 @@ UPDATE_INTERVAL_MINUTES: Final = 30
 #: in the options flow, where 0 turns the background touch off.
 KEEP_ALIVE_MINUTES: Final = 10
 MAX_KEEP_ALIVE_MINUTES: Final = 60
+#: One rejected poll is often a blip (a recycled portal app pool, a chart
+#: state that timed out).  Only ask for a fresh cookie after this many polls
+#: in a row come back unauthenticated.
+AUTH_FAILURES_BEFORE_REAUTH: Final = 2
 
 SERVICE_BACKFILL: Final = "backfill"
 SERVICE_CHECK_SESSION: Final = "check_session"
@@ -79,6 +83,7 @@ COST_STATISTIC_ID: Final = f"{DOMAIN}:cost"
 PLATFORMS: Final = ["sensor"]
 
 __all__ = [
+    "AUTH_FAILURES_BEFORE_REAUTH",
     "AUTH_MODE_COOKIE",
     "AUTH_MODE_PASSWORD",
     "BASE_URL",

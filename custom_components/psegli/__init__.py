@@ -180,17 +180,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
+    keep_alive_failures = 0
+
     async def _async_keep_alive(now: datetime) -> None:
         """Keep the PSEG session from idling out between polls.
 
         The portal expires sessions that stop being used, which is what makes a
-        pasted cookie die once no browser is talking to it.  A failed touch is
-        only logged: the coordinator decides when authentication is broken.
+        pasted cookie die once no browser is talking to it.  A failing touch is
+        the first sign the session is gone, so it is logged once at warning
+        level instead of being hidden in the debug log.
         """
+        nonlocal keep_alive_failures
         try:
             await client.async_keep_alive()
         except PsegliError as err:
-            _LOGGER.debug("PSEG session keep-alive failed: %s", err)
+            keep_alive_failures += 1
+            if keep_alive_failures == 1:
+                _LOGGER.warning(
+                    "Could not keep the PSEG session alive (%s); the next poll "
+                    "will show whether the session is really gone",
+                    err,
+                )
+            else:
+                _LOGGER.debug(
+                    "PSEG keep-alive still failing (%s times): %s",
+                    keep_alive_failures,
+                    err,
+                )
+            return
+        if keep_alive_failures:
+            _LOGGER.info("The PSEG session is answering again")
+        keep_alive_failures = 0
 
     try:
         keep_alive_minutes = int(

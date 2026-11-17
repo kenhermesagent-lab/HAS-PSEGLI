@@ -69,6 +69,11 @@ async def async_get_config_entry_diagnostics(
             if coordinator.update_interval is not None
             else None
         ),
+        "consecutive_failed_polls": coordinator.consecutive_auth_failures,
+        "session_age_minutes": coordinator.client.session_age_minutes,
+        "keep_alive": coordinator.client.keep_alive_stats,
+        "cookie_expiry": coordinator.client.cookie_expiry(),
+        "recent_auth_failures": coordinator.client.recent_auth_failures,
     }
     report["data"] = {
         "intervals": len(data.points) if data else 0,
