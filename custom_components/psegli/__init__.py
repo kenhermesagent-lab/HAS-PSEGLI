@@ -159,9 +159,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     def _async_record_session_event(event: dict[str, Any]) -> None:
         """Persist a rejection or recovery without delaying the request."""
-        hass.async_create_background_task(
-            hass, session_log.async_add(event), "psegli session log"
-        )
+        coroutine = session_log.async_add(event)
+        try:
+            # HomeAssistant.async_create_background_task takes (target, name);
+            # passing the hass instance again raised TypeError, which left the
+            # coroutine unawaited and lost every stored event.
+            hass.async_create_background_task(coroutine, "psegli session log")
+        except Exception:  # noqa: BLE001 - persistence must never break polling
+            coroutine.close()
+            _LOGGER.warning(
+                "Could not schedule storing the PSEG session timeline",
+                exc_info=True,
+            )
 
     client = PsegliClient(
         session,
