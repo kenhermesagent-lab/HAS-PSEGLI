@@ -38,6 +38,30 @@ Home Assistant also touches the dashboard every 10 minutes. MyMeter expires a se
 
 Credentials live in Home Assistant's `.storage` and are only sent to `mysmartenergy.psegliny.com`.
 
+### When PSEG asks for a captcha
+
+PSEG puts reCAPTCHA in front of the login form but only demands it when it does not trust the request — a few automated attempts from Home Assistant's IP is enough. The integration does not try to solve it: as soon as PSEG asks for a captcha, automatic sign-in pauses and the entry asks you for a session cookie instead, so the captcha is not fed and the account is not hammered.
+
+The easiest way to hand it a good cookie without opening developer tools is the helper in `tools/`:
+
+```bash
+pip install playwright
+playwright install chromium
+python tools/login_helper.py
+```
+
+A Chromium window opens at the portal. Sign in yourself, captcha and any verification code included; the script waits for the dashboard, then prints the `Cookie` header. With `--ha-url http://homeassistant.local:8123` and a long-lived token in `HASS_TOKEN` it pushes the cookie straight into Home Assistant instead.
+
+You can also set the cookie yourself:
+
+```yaml
+action: psegli.set_cookie
+data:
+  cookie: "MM_SID=...; __RequestVerificationToken=..."
+```
+
+The action validates the cookie before storing it, then reloads the entry and starts polling with it immediately. It works even while Home Assistant is showing the *Re-authenticate* prompt, because it does not need the integration to be loaded. After that the ten-minute keep-alive keeps the session warm, so this is an occasional job rather than a per-restart one. Automatic sign-in resumes whenever PSEG stops asking for a captcha, for example once the account cools down or after a password reset.
+
 ## Installation
 
 ### HACS (recommended)

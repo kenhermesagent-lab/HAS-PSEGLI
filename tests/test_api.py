@@ -70,6 +70,8 @@ class FakePortal:
         self.rotate_session = True
         self.last_login_form: dict[str, Any] = {}
         self.last_login_headers: dict[str, str] = {}
+        self.captcha_message: str | None = None
+        self.accept_login_without_session = False
         self._counter = 0
 
     def new_session(self) -> str:
@@ -101,6 +103,16 @@ class FakePortal:
                 {
                     "AjaxResults": [],
                     "Data": {"LoginErrorMessage": "Invalid email address or password"},
+                }
+            )
+        if self.accept_login_without_session:
+            # PSEG answers the POST as if it worked but never opens a session.
+            return web.json_response({"AjaxResults": [], "Data": {}})
+        if self.captcha_message is not None:
+            return web.json_response(
+                {
+                    "AjaxResults": [],
+                    "Data": {"LoginErrorMessage": self.captcha_message},
                 }
             )
         if self.challenge is not None:
@@ -235,6 +247,43 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.portal.login_attempts, 0)
         self.assertNotEqual(first, f"MM_SID={sid}")
         self.assertIn(client.current_cookie().split("MM_SID=")[1], self.portal.valid_sessions)
+
+    async def test_captcha_pauses_further_sign_in_attempts(self) -> None:
+        self.portal.captcha_message = "Please provide a valid login captcha"
+        client = self.client(email=EMAIL, password=PASSWORD)
+
+        with self.assertRaises(exceptions.PsegliLoginRequired) as first:
+            await client.async_login()
+        with self.assertRaises(exceptions.PsegliLoginRequired):
+            await client.async_login()
+
+        self.assertIn("captcha", str(first.exception).lower())
+        self.assertIn("paused", str(first.exception).lower())
+        # The second call must not touch the portal at all.
+        self.assertEqual(self.portal.login_attempts, 1)
+
+    async def test_a_fresh_cookie_clears_the_captcha_block(self) -> None:
+        self.portal.captcha_message = "Please provide a valid login captcha"
+        client = self.client(email=EMAIL, password=PASSWORD)
+        with self.assertRaises(exceptions.PsegliLoginRequired):
+            await client.async_login()
+        self.assertIsNotNone(client.login_blocked)
+
+        client.update_cookie(f"MM_SID={self.portal.new_session()}")
+        self.assertIsNone(client.login_blocked)
+        points = await self.fetch(client)
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(self.portal.login_attempts, 1)
+
+    async def test_sign_in_that_opens_no_session_asks_for_a_human(self) -> None:
+        self.portal.accept_login_without_session = True
+        client = self.client(email=EMAIL, password=PASSWORD)
+
+        with self.assertRaises(exceptions.PsegliLoginRequired) as raised:
+            await client.async_login()
+
+        self.assertIn("did not open a session", str(raised.exception))
 
     async def test_wrong_password_raises_auth_error(self) -> None:
         client = self.client(email=EMAIL, password="wrong password")

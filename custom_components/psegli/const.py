@@ -67,6 +67,7 @@ KEEP_ALIVE_MINUTES: Final = 10
 
 SERVICE_BACKFILL: Final = "backfill"
 SERVICE_CHECK_SESSION: Final = "check_session"
+SERVICE_SET_COOKIE: Final = "set_cookie"
 ATTR_DAYS: Final = "days"
 
 USAGE_STATISTIC_ID: Final = f"{DOMAIN}:usage"
@@ -113,6 +114,7 @@ __all__ = [
     "RATE_MODE_TOU",
     "SERVICE_BACKFILL",
     "SERVICE_CHECK_SESSION",
+    "SERVICE_SET_COOKIE",
     "UPDATE_INTERVAL_MINUTES",
     "USAGE_STATISTIC_ID",
     "WEEK_START_MONDAY",

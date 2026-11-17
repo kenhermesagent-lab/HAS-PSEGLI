@@ -1,17 +1,25 @@
 backfill:
-  name: Backfill usage
-  description: >-
-    Download historical hourly usage from PSEG Long Island and import it into
-    Home Assistant long-term statistics. Existing intervals are skipped.
   fields:
     days:
       name: Days
-      description: How many days of history to request (1-400).
+      description: How many days of history to download, 1 to 400.
       required: false
-      example: 30
+      default: 30
       selector:
         number:
           min: 1
           max: 400
-          step: 1
           unit_of_measurement: days
+
+set_cookie:
+  fields:
+    cookie:
+      name: Cookie
+      description: >-
+        The Cookie request header from a logged-in MySmartEnergy session. Get it
+        from tools/login_helper.py, or from the browser developer tools.
+      required: true
+      example: "MM_SID=...; __RequestVerificationToken=..."
+      selector:
+        text:
+          multiline: true

@@ -112,6 +112,7 @@ class PsegliClient:
         self._stored_cookie = ""
         self._login_lock = asyncio.Lock()
         self._last_login_attempt = 0.0
+        self._login_blocked = ""
         self.update_cookie(cookie)
 
     # ------------------------------------------------------------------
@@ -123,11 +124,18 @@ class PsegliClient:
         """Return True when stored credentials allow an automatic sign-in."""
         return bool(self._email and self._password)
 
+    @property
+    def login_blocked(self) -> str | None:
+        """Return why automatic sign-in is paused, or None when it is not."""
+        return self._login_blocked or None
+
     def update_cookie(self, cookie: str) -> None:
         """Replace the stored session cookie and load it into the jar."""
         self._stored_cookie = normalize_cookie(cookie)
         cookies = parse_cookie_header(self._stored_cookie)
         if cookies:
+            # A fresh cookie is how a user gets past a captcha or 2FA wall.
+            self._login_blocked = ""
             self._session.cookie_jar.update_cookies(
                 cookies, response_url=URL(f"{self._base_url}/")
             )
@@ -172,6 +180,9 @@ class PsegliClient:
                 "No PSEG username and password are stored, so a new session "
                 "cookie has to be pasted by hand"
             )
+        if self._login_blocked:
+            # Retrying only makes the captcha/2FA wall worse.
+            raise PsegliLoginRequired(self._login_blocked)
 
         async with self._login_lock:
             if not force and self._cooldown_remaining():
@@ -303,7 +314,15 @@ class PsegliClient:
             raise
 
         # Trust only a dashboard that actually renders with the new cookies.
-        await self._async_dashboard_token()
+        try:
+            await self._async_dashboard_token()
+        except PsegliAuthError as err:
+            raise self._login_blocked_error(
+                "PSEG accepted the sign-in request but did not open a session. "
+                "It is probably asking for a captcha or another confirmation, so "
+                "automatic sign-in is paused until a fresh session cookie is "
+                "supplied."
+            ) from err
 
     def _cooldown_remaining(self) -> int:
         """Return how many seconds of the sign-in cooldown are left."""
@@ -312,8 +331,12 @@ class PsegliClient:
         remaining = LOGIN_COOLDOWN - (time.monotonic() - self._last_login_attempt)
         return max(0, int(remaining))
 
-    @staticmethod
-    def _raise_for_login_challenge(payload: Mapping[str, Any]) -> None:
+    def _login_blocked_error(self, reason: str) -> PsegliLoginRequired:
+        """Remember that only a human can sign in, and build the error."""
+        self._login_blocked = reason
+        return PsegliLoginRequired(reason)
+
+    def _raise_for_login_challenge(self, payload: Mapping[str, Any]) -> None:
         """Turn a sign-in response into a precise error for the user."""
         data = payload.get("Data")
         if not isinstance(data, Mapping):
@@ -321,12 +344,19 @@ class PsegliClient:
 
         message = str(data.get("LoginErrorMessage") or "").strip()
         if message:
+            if "captcha" in message.lower():
+                raise self._login_blocked_error(
+                    "PSEG asks for a captcha before it will sign in. That cannot "
+                    "be answered automatically, so automatic sign-in is paused "
+                    "until a fresh session cookie is supplied."
+                )
             raise PsegliAuthError(f"PSEG rejected the sign-in: {message}")
 
         if _is_truthy(data.get("RecaptchaOnLogin")):
-            raise PsegliLoginRequired(
-                "PSEG wants a reCAPTCHA for this sign-in. Sign in by hand and "
-                "paste a session cookie instead."
+            raise self._login_blocked_error(
+                "PSEG wants a reCAPTCHA for this sign-in. That cannot be "
+                "answered automatically, so automatic sign-in is paused until a "
+                "fresh session cookie is supplied."
             )
 
         for key, reason in (
@@ -341,7 +371,7 @@ class PsegliClient:
             ("PasswordExpired", "a password change"),
         ):
             if _is_truthy(data.get(key)):
-                raise PsegliLoginRequired(
+                raise self._login_blocked_error(
                     f"PSEG asks for {reason} during sign-in, which cannot be "
                     "answered automatically. Sign in by hand and paste a "
                     "session cookie instead."
@@ -450,6 +480,7 @@ class PsegliClient:
             "sign_in_method": "email and password" if self.can_login else "cookie",
             "stored_cookie_names": sorted(parse_cookie_header(self._stored_cookie)),
             "cooldown_seconds": self._cooldown_remaining(),
+            "login_blocked": self.login_blocked,
             "steps": steps,
             "ok": False,
             "summary": "",

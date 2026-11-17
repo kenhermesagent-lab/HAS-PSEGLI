@@ -120,6 +120,10 @@
     "check_session": {
       "name": "Check session",
       "description": "Test the stored PSEG session step by step and return what PSEG answered. Nothing is changed apart from one sign-in attempt when the session is dead."
+    },
+    "set_cookie": {
+      "name": "Set session cookie",
+      "description": "Store a PSEG session cookie from a browser that solved the captcha, and start using it immediately."
     }
   }
 }

@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 
-from .api import PsegliClient
+from .api import PsegliClient, normalize_cookie
 from .const import (
     ATTR_DAYS,
     CONF_BACKFILL_DAYS,
@@ -28,6 +28,7 @@ from .const import (
     PLATFORMS,
     SERVICE_BACKFILL,
     SERVICE_CHECK_SESSION,
+    SERVICE_SET_COOKIE,
     USAGE_STATISTIC_ID,
 )
 from .coordinator import PsegliCoordinator
@@ -69,6 +70,40 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             return reports[0]
         return {"entries": reports}
 
+    async def _async_handle_set_cookie(call: ServiceCall) -> None:
+        """Store a session cookie captured from a browser that solved the captcha.
+
+        This is the way back in when setup is failing with an auth error, so it
+        must not depend on a loaded coordinator: the cookie is validated with a
+        throwaway session and the entry is reloaded afterwards.
+        """
+        cookie = normalize_cookie(str(call.data.get(CONF_COOKIE, "")))
+        if not cookie:
+            raise HomeAssistantError("A PSEG session cookie is required")
+
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            raise HomeAssistantError("PSEG Long Island is not configured")
+
+        session = async_create_clientsession(
+            hass, auto_cleanup=False, cookie_jar=aiohttp.CookieJar(unsafe=False)
+        )
+        try:
+            await PsegliClient(session, cookie).async_validate()
+        except PsegliError as err:
+            raise HomeAssistantError(f"PSEG rejected that cookie: {err}") from err
+        finally:
+            await session.close()
+
+        for entry in entries:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_COOKIE: cookie}
+            )
+            if entry.state is ConfigEntryState.LOADED:
+                await hass.config_entries.async_reload(entry.entry_id)
+            else:
+                await hass.config_entries.async_setup(entry.entry_id)
+
     if not hass.services.has_service(DOMAIN, SERVICE_BACKFILL):
         hass.services.async_register(
             DOMAIN, SERVICE_BACKFILL, _async_handle_backfill
@@ -79,6 +114,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             SERVICE_CHECK_SESSION,
             _async_handle_check_session,
             supports_response=SupportsResponse.ONLY,
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_COOKIE):
+        hass.services.async_register(
+            DOMAIN, SERVICE_SET_COOKIE, _async_handle_set_cookie
         )
     return True
 
