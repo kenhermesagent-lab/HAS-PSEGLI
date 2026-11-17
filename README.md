@@ -32,6 +32,10 @@ Three things keep the automatic mode out of your way:
 - **Sign-ins are rate limited.** After a failed sign-in it waits 15 minutes before trying again, so a wrong password can never lock your account.
 - **PSEG's challenges are detected.** If the account is asked for a security question, an email/SMS code, a reCAPTCHA or a password change, the integration says so instead of guessing, and you finish with the cookie method.
 
+The sign-in reproduces what the portal's own page does: it loads the login page, submits the `__RequestVerificationToken` the page renders, sends the same browser headers (`Origin`, `Referer`, `X-Requested-With`) and asks for *Remember Me*, so the session comes back as a persistent cookie.
+
+Home Assistant also touches the dashboard every 10 minutes. MyMeter expires a session that stops being used — that is why a pasted cookie used to die as soon as the browser tab was closed — so the periodic touch keeps the stored session, pasted or automatic, alive between the 30-minute polls.
+
 Credentials live in Home Assistant's `.storage` and are only sent to `mysmartenergy.psegliny.com`.
 
 ## Installation
@@ -53,7 +57,7 @@ Copy `custom_components/psegli` into your Home Assistant `config/custom_componen
 
 Use this when your account asks for a verification code, or when you prefer not to store a password.
 
-1. Log in at <https://mysmartenergy.psegliny.com/Dashboard>.
+1. Log in at <https://mysmartenergy.psegliny.com/Dashboard> and tick **Remember Me** — otherwise the portal only gives the browser a session cookie that it discards when the tab closes.
 2. Open your browser developer tools (F12) → **Network** tab.
 3. Reload the page.
 4. Click the `Dashboard` request.
@@ -123,7 +127,9 @@ PSEG keeps sub-daily interval data for about 13 months. The import rewrites the 
 
 **"PSEG rejected that cookie"** — the cookie is expired or was copied from a page that is not logged in. Repeat the cookie steps and paste the whole header.
 
-**Automatic sign-in stopped working** — check the log for the PSEG message. *Invalid email address or password* means the stored password changed: remove and re-add the integration, or re-authenticate. A message about a security question, verification code or reCAPTCHA means the account needs a human; switch the entry to the session cookie method. PSEG may also lock the account the same way a browser would, so keep the sign-in method honest rather than retrying a bad password.
+**Automatic sign-in stopped working** — check the log for the PSEG message, which is logged verbatim. *Invalid email address or password* means the stored password changed: remove and re-add the integration, or re-authenticate. A message about a security question, verification code or reCAPTCHA means the account needs a human; switch the entry to the session cookie method. PSEG may also lock the account the same way a browser would, so keep the sign-in method honest rather than retrying a bad password.
+
+**The cookie worked, then stopped after closing the browser** — the pasted cookie was a session cookie and the portal expired the idle session. The integration now touches the dashboard every 10 minutes to prevent that; if it still expires, log in again with **Remember Me** ticked and paste the new header, which gives the portal a persistent cookie to renew from.
 
 **Sign-in succeeded but no data** — the login worked and the account simply has no usage for that range; check the portal itself.
 

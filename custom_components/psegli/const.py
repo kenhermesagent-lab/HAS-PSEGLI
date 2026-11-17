@@ -61,6 +61,9 @@ DEFAULT_LOOKBACK_DAYS: Final = 3
 DEFAULT_BACKFILL_DAYS: Final = 30
 MAX_BACKFILL_DAYS: Final = 400
 UPDATE_INTERVAL_MINUTES: Final = 30
+#: The portal expires a session that stops being used; touch it well inside that
+#: window so a pasted cookie and an automatic login both keep working.
+KEEP_ALIVE_MINUTES: Final = 10
 
 SERVICE_BACKFILL: Final = "backfill"
 ATTR_DAYS: Final = "days"
@@ -100,6 +103,7 @@ __all__ = [
     "DEFAULT_LOOKBACK_DAYS",
     "DEFAULT_TARIFF",
     "DOMAIN",
+    "KEEP_ALIVE_MINUTES",
     "LOGIN_PATH",
     "MAX_BACKFILL_DAYS",
     "NAME",

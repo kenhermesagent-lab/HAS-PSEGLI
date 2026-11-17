@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 
 from .api import PsegliClient
 from .const import (
@@ -20,12 +22,14 @@ from .const import (
     CONF_TIMESTAMP_OFFSET,
     DEFAULT_BACKFILL_DAYS,
     DOMAIN,
+    KEEP_ALIVE_MINUTES,
     MAX_BACKFILL_DAYS,
     PLATFORMS,
     SERVICE_BACKFILL,
     USAGE_STATISTIC_ID,
 )
 from .coordinator import PsegliCoordinator
+from .exceptions import PsegliError
 from .statistics import async_has_statistics
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +115,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_request_refresh()
 
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
+
+    async def _async_keep_alive(now: datetime) -> None:
+        """Keep the PSEG session from idling out between polls.
+
+        The portal expires sessions that stop being used, which is what makes a
+        pasted cookie die once no browser is talking to it.  A failed touch is
+        only logged: the coordinator decides when authentication is broken.
+        """
+        try:
+            await client.async_keep_alive()
+        except PsegliError as err:
+            _LOGGER.debug("PSEG session keep-alive failed: %s", err)
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _async_keep_alive, timedelta(minutes=KEEP_ALIVE_MINUTES)
+        )
+    )
 
     backfill_days = int(
         entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS)

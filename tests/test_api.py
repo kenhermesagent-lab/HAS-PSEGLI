@@ -67,6 +67,8 @@ class FakePortal:
         self.login_attempts = 0
         self.challenge: dict[str, Any] | None = None
         self.rotate_session = True
+        self.last_login_form: dict[str, Any] = {}
+        self.last_login_headers: dict[str, str] = {}
         self._counter = 0
 
     def new_session(self) -> str:
@@ -89,6 +91,17 @@ class FakePortal:
     async def login(self, request: web.Request) -> web.Response:
         form = await request.post()
         self.login_attempts += 1
+        self.last_login_form = dict(form)
+        self.last_login_headers = dict(request.headers)
+        # The real portal's JavaScript always submits the page's antiforgery
+        # token with the login POST.
+        if form.get("__RequestVerificationToken") != TOKEN:
+            return web.json_response(
+                {
+                    "AjaxResults": [],
+                    "Data": {"LoginErrorMessage": "Invalid email address or password"},
+                }
+            )
         if self.challenge is not None:
             return web.json_response({"AjaxResults": [], "Data": self.challenge})
         if (
@@ -260,6 +273,36 @@ class PsegliClientTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(exceptions.PsegliAuthError):
             await self.fetch(client)
+
+        self.assertEqual(self.portal.login_attempts, 0)
+
+    async def test_login_posts_the_antiforgery_token_like_the_portal(self) -> None:
+        client = self.client(email=EMAIL, password=PASSWORD)
+
+        await client.async_login()
+
+        self.assertEqual(
+            self.portal.last_login_form.get("__RequestVerificationToken"), TOKEN
+        )
+        self.assertEqual(self.portal.last_login_form.get("RememberMe"), "true")
+        self.assertEqual(self.portal.last_login_headers.get("Origin"), self.base_url)
+        self.assertTrue(
+            self.portal.last_login_headers.get("Referer", "").startswith(self.base_url)
+        )
+
+    async def test_keep_alive_keeps_a_valid_session(self) -> None:
+        sid = self.portal.new_session()
+        client = self.client(f"MM_SID={sid}")
+
+        await client.async_keep_alive()
+
+        self.assertEqual(self.portal.login_attempts, 0)
+
+    async def test_keep_alive_reports_a_dead_session_without_signing_in(self) -> None:
+        client = self.client("MM_SID=stale", email=EMAIL, password=PASSWORD)
+
+        with self.assertRaises(exceptions.PsegliAuthError):
+            await client.async_keep_alive()
 
         self.assertEqual(self.portal.login_attempts, 0)
 

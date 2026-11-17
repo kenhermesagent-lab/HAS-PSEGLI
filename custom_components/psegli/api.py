@@ -151,6 +151,16 @@ class PsegliClient:
         await self._async_dashboard_token()
         self._persist_cookie()
 
+    async def async_keep_alive(self) -> None:
+        """Touch the dashboard so the portal's idle timer keeps the session.
+
+        MyMeter has no heartbeat endpoint; the browser only keeps its own
+        session alive because it keeps making requests.  A cheap authenticated
+        request does the same for a session that no browser is using.
+        """
+        await self._async_dashboard_token()
+        self._persist_cookie()
+
     async def async_login(self) -> None:
         """Sign in with the stored username and password."""
         if not self.can_login:
@@ -244,9 +254,20 @@ class PsegliClient:
             await cleared
         self._stored_cookie = ""
 
-        await self._async_request("GET", "/", headers=HTML_HEADERS, referer=None)
+        _url, html, _content_type = await self._async_request(
+            "GET", "/", headers=HTML_HEADERS, referer=f"{self._base_url}/"
+        )
+
+        # The portal's own JavaScript appends the page's antiforgery token to
+        # every AJAX POST, login included (BaseJs.min.js processAjax).  Without
+        # it PSEG answers the generic "invalid email address or password" even
+        # when the credentials are right.
+        token = extract_request_verification_token(html) or ""
+        if not token:
+            _LOGGER.debug("PSEG login page did not contain a verification token")
 
         form = {
+            "__RequestVerificationToken": token,
             "LoginEmail": self._email or "",
             "LoginPassword": self._password or "",
             "RedirectUrl": "",
@@ -257,7 +278,11 @@ class PsegliClient:
             "RememberMe": "true",
         }
         _url, text, _content_type = await self._async_request(
-            "POST", LOGIN_PATH, data=form, headers=AJAX_HEADERS, referer=None
+            "POST",
+            LOGIN_PATH,
+            data=form,
+            headers={**AJAX_HEADERS, "Origin": self._base_url},
+            referer=f"{self._base_url}/",
         )
 
         try:
@@ -267,7 +292,11 @@ class PsegliClient:
 
         if not isinstance(payload, Mapping):
             payload = {}
-        self._raise_for_login_challenge(payload)
+        try:
+            self._raise_for_login_challenge(payload)
+        except PsegliAuthError as err:
+            _LOGGER.warning("PSEG did not accept the automatic sign-in: %s", err)
+            raise
 
         # Trust only a dashboard that actually renders with the new cookies.
         await self._async_dashboard_token()
