@@ -60,7 +60,7 @@ data:
   cookie: "MM_SID=...; __RequestVerificationToken=..."
 ```
 
-The action validates the cookie before storing it, then reloads the entry and starts polling with it immediately. It works even while Home Assistant is showing the *Re-authenticate* prompt, because it does not need the integration to be loaded. After that the ten-minute keep-alive keeps the session warm, so this is an occasional job rather than a per-restart one. Automatic sign-in resumes whenever PSEG stops asking for a captcha, for example once the account cools down or after a password reset.
+The action validates the cookie before storing it, then reloads the entry and starts polling with it immediately. It works even while Home Assistant is showing the *Re-authenticate* prompt, because it does not need the integration to be loaded. After that the keep-alive keeps the session warm (every ten minutes by default, adjustable under **Configure**), so this is an occasional job rather than a per-restart one. Automatic sign-in resumes whenever PSEG stops asking for a captcha, for example once the account cools down or after a password reset.
 
 ## Installation
 

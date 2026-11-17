@@ -19,12 +19,14 @@ from .const import (
     CONF_BACKFILL_DAYS,
     CONF_COOKIE,
     CONF_EMAIL,
+    CONF_KEEP_ALIVE_MINUTES,
     CONF_PASSWORD,
     CONF_TIMESTAMP_OFFSET,
     DEFAULT_BACKFILL_DAYS,
     DOMAIN,
     KEEP_ALIVE_MINUTES,
     MAX_BACKFILL_DAYS,
+    MAX_KEEP_ALIVE_MINUTES,
     PLATFORMS,
     SERVICE_BACKFILL,
     SERVICE_CHECK_SESSION,
@@ -190,11 +192,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except PsegliError as err:
             _LOGGER.debug("PSEG session keep-alive failed: %s", err)
 
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass, _async_keep_alive, timedelta(minutes=KEEP_ALIVE_MINUTES)
+    try:
+        keep_alive_minutes = int(
+            entry.options.get(CONF_KEEP_ALIVE_MINUTES, KEEP_ALIVE_MINUTES)
         )
-    )
+    except (TypeError, ValueError):
+        keep_alive_minutes = KEEP_ALIVE_MINUTES
+    keep_alive_minutes = max(0, min(keep_alive_minutes, MAX_KEEP_ALIVE_MINUTES))
+    if keep_alive_minutes:
+        entry.async_on_unload(
+            async_track_time_interval(
+                hass, _async_keep_alive, timedelta(minutes=keep_alive_minutes)
+            )
+        )
+    else:
+        _LOGGER.debug("PSEG session keep-alive is disabled by the options")
 
     backfill_days = int(
         entry.options.get(CONF_BACKFILL_DAYS, DEFAULT_BACKFILL_DAYS)

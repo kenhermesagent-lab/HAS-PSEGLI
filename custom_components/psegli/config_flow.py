@@ -24,6 +24,7 @@ from .const import (
     CONF_DAILY_SERVICE_CHARGE,
     CONF_DELIVERY_RATE,
     CONF_EMAIL,
+    CONF_KEEP_ALIVE_MINUTES,
     CONF_NAME,
     CONF_PASSWORD,
     CONF_PEAK_DELIVERY_RATE,
@@ -37,6 +38,7 @@ from .const import (
     CONF_WEEK_START,
     DEFAULT_TARIFF,
     DOMAIN,
+    KEEP_ALIVE_MINUTES,
     NAME,
     RATE_MODE_FLAT,
     RATE_MODE_TOU,
@@ -175,6 +177,10 @@ def _options_schema(options: Mapping[str, Any]) -> vol.Schema:
             vol.Required(
                 CONF_TIMESTAMP_OFFSET, default=value(CONF_TIMESTAMP_OFFSET)
             ): _number(-720, 720, 15, "min"),
+            vol.Required(
+                CONF_KEEP_ALIVE_MINUTES,
+                default=options.get(CONF_KEEP_ALIVE_MINUTES, KEEP_ALIVE_MINUTES),
+            ): _number(0, 60, 5, "min"),
         }
     )
 

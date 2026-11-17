@@ -56,14 +56,17 @@ CONF_BACKFILL_DAYS = OPT_BACKFILL_DAYS
 CONF_WEEK_START = OPT_WEEK_START
 CONF_BILLING_DAY = OPT_BILLING_DAY
 CONF_TIMESTAMP_OFFSET = OPT_TIMESTAMP_OFFSET
+CONF_KEEP_ALIVE_MINUTES: Final = "keep_alive_minutes"
 
 DEFAULT_LOOKBACK_DAYS: Final = 3
 DEFAULT_BACKFILL_DAYS: Final = 30
 MAX_BACKFILL_DAYS: Final = 400
 UPDATE_INTERVAL_MINUTES: Final = 30
 #: The portal expires a session that stops being used; touch it well inside that
-#: window so a pasted cookie and an automatic login both keep working.
+#: window so a pasted cookie and an automatic login both keep working. Overridable
+#: in the options flow, where 0 turns the background touch off.
 KEEP_ALIVE_MINUTES: Final = 10
+MAX_KEEP_ALIVE_MINUTES: Final = 60
 
 SERVICE_BACKFILL: Final = "backfill"
 SERVICE_CHECK_SESSION: Final = "check_session"
@@ -88,6 +91,7 @@ __all__ = [
     "CONF_DAILY_SERVICE_CHARGE",
     "CONF_DELIVERY_RATE",
     "CONF_EMAIL",
+    "CONF_KEEP_ALIVE_MINUTES",
     "CONF_NAME",
     "CONF_PASSWORD",
     "CONF_PEAK_DELIVERY_RATE",
@@ -108,6 +112,7 @@ __all__ = [
     "KEEP_ALIVE_MINUTES",
     "LOGIN_PATH",
     "MAX_BACKFILL_DAYS",
+    "MAX_KEEP_ALIVE_MINUTES",
     "NAME",
     "PLATFORMS",
     "RATE_MODE_FLAT",

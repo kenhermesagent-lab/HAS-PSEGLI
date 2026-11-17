@@ -67,7 +67,8 @@
           "week_start": "First day of the week",
           "billing_day": "Billing cycle start day",
           "backfill_days": "Days of history to import",
-          "timestamp_offset_minutes": "Timestamp correction"
+          "timestamp_offset_minutes": "Timestamp correction",
+          "keep_alive_minutes": "Session keep-alive (minutes)"
         },
         "data_description": {
           "rate_mode": "Use 'flat' if your bill has one delivery rate all day, or 'tou' for a time-of-day rate.",
@@ -81,7 +82,8 @@
           "week_start": "Which day the 'this week' sensor starts on.",
           "billing_day": "Day of the month your billing cycle starts, used by the cycle sensors.",
           "backfill_days": "How much history to download on first setup. 0 disables the automatic backfill.",
-          "timestamp_offset_minutes": "Only change this if PSEG timestamps look shifted in your timezone. Positive values move readings later."
+          "timestamp_offset_minutes": "Only change this if PSEG timestamps look shifted in your timezone. Positive values move readings later.",
+          "keep_alive_minutes": "How often to touch the portal in the background so the session does not idle out. 0 disables it; the session then expires whenever nothing polls it."
         }
       }
     }
